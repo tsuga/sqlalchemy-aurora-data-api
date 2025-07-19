@@ -180,9 +180,9 @@ class TestAuroraDataAPIPostgresDialect(unittest.TestCase, TestAuroraDataAPI):
     @classmethod
     def setUpClass(cls):
         register_dialects()
-        cls.db_name = os.environ.get("AURORA_DB_NAME", __name__)
-        cls.cluster_arn = os.environ.get("AURORA_CLUSTER_ARN", "")
-        cls.secret_arn = os.environ.get("SECRET_ARN", "")
+        cls.db_name = os.environ.get("AURORA_DB_NAME")
+        cls.cluster_arn = os.environ.get("AURORA_CLUSTER_ARN")
+        cls.secret_arn = os.environ.get("SECRET_ARN")
         cls.engine = create_engine(
             cls.dialect + ":@/" + cls.db_name,
             connect_args=dict(aurora_cluster_arn=cls.cluster_arn, secret_arn=cls.secret_arn))
@@ -268,9 +268,9 @@ class TestAuroraDataAPIMySQLDialect(unittest.TestCase, TestAuroraDataAPI):
     @classmethod
     def setUpClass(cls):
         register_dialects()
-        cls.db_name = os.environ.get("AURORA_DB_NAME", __name__)
-        cls.cluster_arn = os.environ.get("AURORA_CLUSTER_ARN", "")
-        cls.secret_arn = os.environ.get("SECRET_ARN", "")
+        cls.db_name = os.environ.get("AURORA_DB_NAME")
+        cls.cluster_arn = os.environ.get("AURORA_CLUSTER_ARN")
+        cls.secret_arn = os.environ.get("SECRET_ARN")
         cls.engine = create_engine(
             cls.dialect + ":@/" + cls.db_name + "?charset=utf8mb4",
             connect_args=dict(aurora_cluster_arn=cls.cluster_arn, secret_arn=cls.secret_arn))
@@ -281,6 +281,7 @@ class TestAuroraDataAPIMySQLDialect(unittest.TestCase, TestAuroraDataAPI):
                 print(result)
 
     def test_orm(self):
+        BasicBase.metadata.drop_all(self.engine, checkfirst=True)
         BasicBase.metadata.create_all(self.engine)
         birthday = datetime.datetime.fromtimestamp(0).date()
         eats_breakfast_at = datetime.time(9, 0, 0, 123)
@@ -300,8 +301,8 @@ class TestAuroraDataAPIMySQLDialect(unittest.TestCase, TestAuroraDataAPI):
             session.commit()
 
             session.add(ed_user)
-            self.assertEqual(session.query(BasicUser).filter_by(name="ed").first().name, "ed")
             session.commit()
+            self.assertEqual(session.query(BasicUser).filter_by(name="ed").first().name, "ed")
             self.assertGreater(session.query(BasicUser).filter(BasicUser.name.like("%ed")).count(), 0)
             u = session.query(BasicUser).filter(BasicUser.name.like("%ed")).first()
             self.assertEqual(u.nickname, "edsnickname")
