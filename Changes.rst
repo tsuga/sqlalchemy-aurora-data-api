@@ -1,3 +1,18 @@
+Changes for v2.0.0 (2025-07-19)
+===============================
+
+**BREAKING CHANGES**
+
+-  **SQLAlchemy 2.0 Support**: Updated entire codebase to support SQLAlchemy 2.0+
+
+-  Replaced deprecated ``util.update_copy`` with dictionary unpacking
+
+-  Updated imports for SQLAlchemy 2.0 compatibility
+
+-  Test files updated to use new DeclarativeBase and session patterns
+
+-  **Note**: This is a breaking change. For SQLAlchemy 1.x support, use version 0.5.0 or earlier.
+
 Changes for v0.5.0 (2023-12-29)
 ===============================
 
