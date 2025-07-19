@@ -5,6 +5,7 @@ import logging
 import datetime
 import enum
 from uuid import UUID as uuid_type, uuid4
+from decimal import Decimal
 
 from sqlalchemy import (
     create_engine,
@@ -19,6 +20,7 @@ from sqlalchemy import (
     Time,
     DateTime,
     Text,
+    delete,
     # Enum,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB, JSON, DATE, TIME, TIMESTAMP, ARRAY
@@ -150,14 +152,14 @@ class User(Base):
     floated = Column(Float)
     nybbled = Column(LargeBinary)
     friends = Column(ARRAY(String))
-    num_friends = Numeric(asdecimal=True)
-    num_laptops = Numeric(asdecimal=False)
+    num_friends = Column(Numeric(asdecimal=True))
+    num_laptops = Column(Numeric(asdecimal=False))
     first_date = Column(Date)
     note = Column(Text)
     # socks = Column(Enum(Socks))
 
 
-class TestAuroraDataAPI(unittest.TestCase):
+class TestAuroraDataAPI(object):
     @classmethod
     def tearDownClass(cls):
         pass
@@ -171,7 +173,7 @@ class TestAuroraDataAPI(unittest.TestCase):
             assert callable(getattr(self.engine.dialect, attr))
 
 
-class TestAuroraDataAPIPostgresDialect(TestAuroraDataAPI):
+class TestAuroraDataAPIPostgresDialect(unittest.TestCase, TestAuroraDataAPI):
     dialect = "postgresql+auroradataapi://"
     # dialect = "postgresql+psycopg2://" + getpass.getuser()
 
@@ -179,7 +181,11 @@ class TestAuroraDataAPIPostgresDialect(TestAuroraDataAPI):
     def setUpClass(cls):
         register_dialects()
         cls.db_name = os.environ.get("AURORA_DB_NAME", __name__)
-        cls.engine = create_engine(cls.dialect + ":@/" + cls.db_name)
+        cls.cluster_arn = os.environ.get("AURORA_CLUSTER_ARN", "")
+        cls.secret_arn = os.environ.get("SECRET_ARN", "")
+        cls.engine = create_engine(
+            cls.dialect + ":@/" + cls.db_name,
+            connect_args=dict(aurora_cluster_arn=cls.cluster_arn, secret_arn=cls.secret_arn))
 
     def test_execute(self):
         with self.engine.connect() as conn:
@@ -191,6 +197,7 @@ class TestAuroraDataAPIPostgresDialect(TestAuroraDataAPI):
         doc = {"foo": [1, 2, 3]}
         blob = b"0123456789ABCDEF" * 1024
         friends = ["Scarlett O'Hara", 'Ada "Hacker" Lovelace']
+        Base.metadata.drop_all(self.engine, checkfirst=True)
         Base.metadata.create_all(self.engine)
         added = datetime.datetime.now().replace(microsecond=123456)
         ed_user = User(
@@ -213,14 +220,14 @@ class TestAuroraDataAPIPostgresDialect(TestAuroraDataAPI):
             # socks=Socks.red,
         )
         Session = sessionmaker(bind=self.engine)
-        session = Session()
+        with Session() as session:
 
-        session.query(User).delete()
-        session.commit()
+            session.execute(delete(User))
+            session.commit()
 
-        session.add(ed_user)
+            session.add(ed_user)
+            session.commit()
         self.assertEqual(session.query(User).filter_by(name="ed").first().name, "ed")
-        session.commit()
         self.assertGreater(session.query(User).filter(User.name.like("%ed")).count(), 0)
         u = session.query(User).filter(User.name.like("%ed")).first()
         self.assertEqual(u.doc, doc)
@@ -255,14 +262,18 @@ class TestAuroraDataAPIPostgresDialect(TestAuroraDataAPI):
         self.assertEqual(processor(ts), datetime.datetime.fromisoformat(ts.ljust(26, "0")))
 
 
-class TestAuroraDataAPIMySQLDialect(TestAuroraDataAPI):
+class TestAuroraDataAPIMySQLDialect(unittest.TestCase, TestAuroraDataAPI):
     dialect = "mysql+auroradataapi://"
 
     @classmethod
     def setUpClass(cls):
         register_dialects()
         cls.db_name = os.environ.get("AURORA_DB_NAME", __name__)
-        cls.engine = create_engine(cls.dialect + ":@/" + cls.db_name + "?charset=utf8mb4")
+        cls.cluster_arn = os.environ.get("AURORA_CLUSTER_ARN", "")
+        cls.secret_arn = os.environ.get("SECRET_ARN", "")
+        cls.engine = create_engine(
+            cls.dialect + ":@/" + cls.db_name + "?charset=utf8mb4",
+            connect_args=dict(aurora_cluster_arn=cls.cluster_arn, secret_arn=cls.secret_arn))
 
     def test_execute(self):
         with self.engine.connect() as conn:
@@ -283,20 +294,20 @@ class TestAuroraDataAPIMySQLDialect(TestAuroraDataAPI):
             married_at=married_at,
         )
         Session = sessionmaker(bind=self.engine)
-        session = Session()
+        with Session() as session:
 
-        session.query(BasicUser).delete()
-        session.commit()
+            session.execute(delete(BasicUser))
+            session.commit()
 
-        session.add(ed_user)
-        self.assertEqual(session.query(BasicUser).filter_by(name="ed").first().name, "ed")
-        session.commit()
-        self.assertGreater(session.query(BasicUser).filter(BasicUser.name.like("%ed")).count(), 0)
-        u = session.query(BasicUser).filter(BasicUser.name.like("%ed")).first()
-        self.assertEqual(u.nickname, "edsnickname")
-        self.assertEqual(u.birthday, birthday)
-        self.assertEqual(u.eats_breakfast_at, eats_breakfast_at.replace(microsecond=0))
-        self.assertEqual(u.married_at, married_at.replace(microsecond=0))
+            session.add(ed_user)
+            self.assertEqual(session.query(BasicUser).filter_by(name="ed").first().name, "ed")
+            session.commit()
+            self.assertGreater(session.query(BasicUser).filter(BasicUser.name.like("%ed")).count(), 0)
+            u = session.query(BasicUser).filter(BasicUser.name.like("%ed")).first()
+            self.assertEqual(u.nickname, "edsnickname")
+            self.assertEqual(u.birthday, birthday)
+            self.assertEqual(u.eats_breakfast_at, eats_breakfast_at.replace(microsecond=0))
+            self.assertEqual(u.married_at, married_at.replace(microsecond=0))
 
 
 if __name__ == "__main__":
