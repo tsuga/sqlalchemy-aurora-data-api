@@ -4,13 +4,29 @@ sqlalchemy-aurora-data-api
 
 import json, datetime, re
 
-from sqlalchemy import cast, func, util
+from sqlalchemy import cast, func, __version__ as sqlalchemy_version
 import sqlalchemy.sql.sqltypes as sqltypes
 from sqlalchemy.dialects.postgresql.base import PGDialect
 from sqlalchemy.dialects.postgresql import JSON, JSONB, UUID, DATE, TIME, TIMESTAMP, ARRAY, ENUM
 from sqlalchemy.dialects.mysql.base import MySQLDialect
+from sqlalchemy.sql import text
 
 import aurora_data_api
+
+
+def _check_sqlalchemy_version():
+    """Ensure we're running with SQLAlchemy 2.0+"""
+    major, minor = map(int, sqlalchemy_version.split('.')[:2])
+    if major < 2:
+        raise RuntimeError(
+            f"sqlalchemy-aurora-data-api 1.0.0+ requires SQLAlchemy 2.0+. "
+            f"Found SQLAlchemy {sqlalchemy_version}. "
+            f"For SQLAlchemy 1.x support, use sqlalchemy-aurora-data-api 0.5.0 or earlier."
+        )
+
+
+# Check version on import
+_check_sqlalchemy_version()
 
 
 class _ADA_SA_JSON(sqltypes.JSON):
@@ -125,18 +141,16 @@ class _ADA_ARRAY(ARRAY):
 
 
 class AuroraMySQLDataAPIDialect(MySQLDialect):
-    # See https://docs.sqlalchemy.org/en/13/core/internals.html#sqlalchemy.engine.interfaces.Dialect
+    # See https://docs.sqlalchemy.org/en/20/core/internals.html#sqlalchemy.engine.interfaces.Dialect
     driver = "aurora_data_api"
     default_schema_name = None
     supports_native_decimal = True
-    colspecs = util.update_copy(
-        MySQLDialect.colspecs,
-        {
-            sqltypes.Date: _ADA_DATE,
-            sqltypes.Time: _ADA_TIME,
-            sqltypes.DateTime: _ADA_TIMESTAMP,
-        },
-    )
+    colspecs = {
+        **MySQLDialect.colspecs,
+        sqltypes.Date: _ADA_DATE,
+        sqltypes.Time: _ADA_TIME,
+        sqltypes.DateTime: _ADA_TIMESTAMP,
+    }
     supports_statement_cache = True
 
     @classmethod
@@ -144,30 +158,28 @@ class AuroraMySQLDataAPIDialect(MySQLDialect):
         return aurora_data_api
 
     def _detect_charset(self, connection):
-        return connection.execute("SHOW VARIABLES LIKE 'character_set_client'").fetchone()[1]
+        return connection.execute(text("SHOW VARIABLES LIKE 'character_set_client'")).fetchone()[1]
 
     def _extract_error_code(self, exception):
         return exception.args[0].value
 
 
 class AuroraPostgresDataAPIDialect(PGDialect):
-    # See https://docs.sqlalchemy.org/en/13/core/internals.html#sqlalchemy.engine.interfaces.Dialect
+    # See https://docs.sqlalchemy.org/en/20/core/internals.html#sqlalchemy.engine.interfaces.Dialect
     driver = "aurora_data_api"
     default_schema_name = None
-    colspecs = util.update_copy(
-        PGDialect.colspecs,
-        {
-            sqltypes.JSON: _ADA_SA_JSON,
-            JSON: _ADA_JSON,
-            JSONB: _ADA_JSONB,
-            UUID: _ADA_UUID,
-            sqltypes.Date: _ADA_DATE,
-            sqltypes.Time: _ADA_TIME,
-            sqltypes.DateTime: _ADA_TIMESTAMP,
-            sqltypes.Enum: _ADA_ENUM,
-            ARRAY: _ADA_ARRAY,
-        },
-    )
+    colspecs = {
+        **PGDialect.colspecs,
+        sqltypes.JSON: _ADA_SA_JSON,
+        JSON: _ADA_JSON,
+        JSONB: _ADA_JSONB,
+        UUID: _ADA_UUID,
+        sqltypes.Date: _ADA_DATE,
+        sqltypes.Time: _ADA_TIME,
+        sqltypes.DateTime: _ADA_TIMESTAMP,
+        sqltypes.Enum: _ADA_ENUM,
+        ARRAY: _ADA_ARRAY,
+    }
     supports_sane_multi_rowcount = False
     supports_statement_cache = True
 
