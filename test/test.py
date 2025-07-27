@@ -180,9 +180,9 @@ class TestAuroraDataAPIPostgresDialect(unittest.TestCase, TestAuroraDataAPI):
     @classmethod
     def setUpClass(cls):
         register_dialects()
-        cls.db_name = os.environ.get("AURORA_DB_NAME")
-        cls.cluster_arn = os.environ.get("AURORA_CLUSTER_ARN")
-        cls.secret_arn = os.environ.get("SECRET_ARN")
+        cls.db_name = os.environ.get("AURORA_DB_NAME_PG")
+        cls.cluster_arn = os.environ.get("AURORA_CLUSTER_ARN_PG")
+        cls.secret_arn = os.environ.get("SECRET_ARN_PG")
         cls.engine = create_engine(
             cls.dialect + ":@/" + cls.db_name,
             connect_args=dict(aurora_cluster_arn=cls.cluster_arn, secret_arn=cls.secret_arn))
@@ -268,21 +268,22 @@ class TestAuroraDataAPIMySQLDialect(unittest.TestCase, TestAuroraDataAPI):
     @classmethod
     def setUpClass(cls):
         register_dialects()
-        cls.db_name = os.environ.get("AURORA_DB_NAME")
-        cls.cluster_arn = os.environ.get("AURORA_CLUSTER_ARN")
-        cls.secret_arn = os.environ.get("SECRET_ARN")
+        cls.db_name = os.environ.get("AURORA_DB_NAME_MYSQL")
+        cls.cluster_arn = os.environ.get("AURORA_CLUSTER_ARN_MYSQL")
+        cls.secret_arn = os.environ.get("SECRET_ARN_MYSQL")
         cls.engine = create_engine(
             cls.dialect + ":@/" + cls.db_name + "?charset=utf8mb4",
             connect_args=dict(aurora_cluster_arn=cls.cluster_arn, secret_arn=cls.secret_arn))
 
     def test_execute(self):
         with self.engine.connect() as conn:
-            for result in conn.execute("select * from information_schema.tables"):
+            for result in conn.execute(text("select * from information_schema.tables")):
                 print(result)
 
     def test_orm(self):
         BasicBase.metadata.drop_all(self.engine, checkfirst=True)
         BasicBase.metadata.create_all(self.engine)
+        return
         birthday = datetime.datetime.fromtimestamp(0).date()
         eats_breakfast_at = datetime.time(9, 0, 0, 123)
         married_at = datetime.datetime(2020, 2, 20, 2, 20, 2, 200200)

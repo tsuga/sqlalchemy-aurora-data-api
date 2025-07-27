@@ -161,8 +161,20 @@ class AuroraMySQLDataAPIDialect(MySQLDialect):
         return connection.execute(text("SHOW VARIABLES LIKE 'character_set_client'")).fetchone()[1]
 
     def _extract_error_code(self, exception):
-        return exception.args[0].value
-
+        # return exception.args[0].value
+        # Aurora Data API exceptions have error codes in the message string
+        # Format: "... Error code: <code>; ..."
+        if hasattr(exception, 'response') and 'Error' in exception.response:
+            error_msg = str(exception.response['Error'].get('Message', ''))
+        else:
+            error_msg = str(exception)
+        
+        # Extract error code from message like "Error code: 1146"
+        import re
+        match = re.search(r'Error code:\s*(\d+)', error_msg)
+        if match:
+            return int(match.group(1))
+        return None
 
 class AuroraPostgresDataAPIDialect(PGDialect):
     # See https://docs.sqlalchemy.org/en/20/core/internals.html#sqlalchemy.engine.interfaces.Dialect
