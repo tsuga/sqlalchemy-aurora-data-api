@@ -178,6 +178,16 @@ class AuroraPostgresDataAPIDialect(PGDialect):
     def _extract_error_code(self, exception):
         return exception.args[0].value
 
+class AuroraMySQLDataAPIDialectAsync(AuroraMySQLDataAPIDialect):
+    @classmethod
+    def import_dbapi(cls):
+        return aurora_data_api.async_
+    
+class AuroraPostgresDataAPIDialectAsync(AuroraPostgresDataAPIDialect):
+    @classmethod
+    def import_dbapi(cls):
+        return aurora_data_api.async_
+
 
 def register_dialects():
     from sqlalchemy.dialects import registry

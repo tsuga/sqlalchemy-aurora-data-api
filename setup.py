@@ -17,7 +17,9 @@ setup(
     entry_points={
         "sqlalchemy.dialects": [
             "mysql.auroradataapi = sqlalchemy_aurora_data_api:AuroraMySQLDataAPIDialect",
+            "mysql.auroradataapiasync = sqlalchemy_aurora_data_api:AuroraMySQLDataAPIDialectAsync",
             "postgresql.auroradataapi = sqlalchemy_aurora_data_api:AuroraPostgresDataAPIDialect",
+            "postgresql.auroradataapiasync = sqlalchemy_aurora_data_api:AuroraPostgresDataAPIDialectAsync",
         ]
     },
     platforms=["MacOS X", "Posix"],
