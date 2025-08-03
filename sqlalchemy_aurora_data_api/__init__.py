@@ -329,13 +329,26 @@ class AsyncAdapt_asyncpg_cursor:
 
             # if not adapt_connection._started:
             #     await adapt_connection._start_transaction()
+            self._cursor = await self._connection.cursor()
+
 
             try:
-                return await self._connection.executemany(
+
+                res = await self._cursor.executemany(
                     operation, seq_of_parameters
                 )
+                await self._cursor.close()
+                return res
+                
             except Exception as error:
                 self._handle_exception(error)
+
+            # try:
+            #     return await self._connection.executemany(
+            #         operation, seq_of_parameters
+            #     )
+            # except Exception as error:
+            #     self._handle_exception(error)
 
     def execute(self, operation, parameters=None):
         self._adapt_connection.await_(
@@ -680,6 +693,7 @@ class AuroraPostgresDataAPIDialectAsync(AuroraPostgresDataAPIDialect):
     # driver = "aurora_data_api.async_"
     is_async = True
     execution_ctx_cls = PGExecutionContext_aurora_data_api_async
+    supports_statement_cache = True
 
     # @classmethod
     # def import_dbapi(cls):
