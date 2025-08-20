@@ -139,6 +139,7 @@ class AuroraMySQLDataAPIDialect(MySQLDialect):
             sqltypes.DateTime: _ADA_TIMESTAMP,
         },
     )
+    supports_savepoints = False  # Disabling nested transactions as Aurora Data API does not support them.
     supports_statement_cache = True
 
     @classmethod
@@ -172,6 +173,7 @@ class AuroraPostgresDataAPIDialect(PGDialect):
     )
     supports_sane_multi_rowcount = False
     supports_statement_cache = True
+    supports_savepoints = False  # Disabling nested transactions as Aurora Data API does not support them.
 
     @classmethod
     def import_dbapi(cls):
@@ -179,7 +181,6 @@ class AuroraPostgresDataAPIDialect(PGDialect):
 
     def _extract_error_code(self, exception):
         return exception.args[0].value
-
 
 
 # class AuroraMySQLDataAPIDialectAsync(AuroraMySQLDataAPIDialect):
@@ -195,6 +196,7 @@ from aurora_data_api.async_ import AsyncAuroraDataAPICursor
 from sqlalchemy.util.concurrency import await_fallback
 from sqlalchemy.util.concurrency import await_only
 from sqlalchemy.engine import AdaptedConnection
+
 
 # FIXME: sqlalchemy.connectors.asyncio.AsyncAdapt_dbapi_cursor
 class AsyncAdapt_asyncpg_cursor:
@@ -278,33 +280,31 @@ class AsyncAdapt_asyncpg_cursor:
     #         except Exception as error:
     #             self._handle_exception(error)
 
-    async def _prepare_and_execute(self, operation, parameters):# FIXME: rename this to _execute
+    async def _prepare_and_execute(self, operation, parameters):  # FIXME: rename this to _execute
         adapt_connection = self._adapt_connection
 
+        # Track if we're starting a new transaction
+        was_started = adapt_connection._started
 
-        
         async with adapt_connection._execute_mutex:
             # if not adapt_connection._started:
             #     await adapt_connection._start_transaction()
 
             self._cursor = await self._connection.cursor()
 
+            # Mark transaction as started when Aurora Data API cursor() creates one
+            if not was_started and hasattr(self, "_cursor") and self._cursor:
+                if hasattr(self._cursor, "_transaction_id") and self._cursor._transaction_id:
+                    adapt_connection._started = True
+
             if parameters is None:
                 parameters = ()
-
-
-
-
-
 
             try:
                 # return await self._cursor.execute(
                 #     operation, parameters
                 # )
-                await self._cursor.execute(
-                    operation, parameters
-                )
-
+                await self._cursor.execute(operation, parameters)
 
                 if self._cursor.description:
                     self.description = self._cursor.description
@@ -314,12 +314,15 @@ class AsyncAdapt_asyncpg_cursor:
                     self.rowcount = self._cursor.rowcount
 
                 await self._cursor.close()
-                
+
             except Exception as error:
                 self._handle_exception(error)
 
     async def _executemany(self, operation, seq_of_parameters):
         adapt_connection = self._adapt_connection
+
+        # Track if we're starting a new transaction
+        was_started = adapt_connection._started
 
         self.description = None
         async with adapt_connection._execute_mutex:
@@ -331,15 +334,16 @@ class AsyncAdapt_asyncpg_cursor:
             #     await adapt_connection._start_transaction()
             self._cursor = await self._connection.cursor()
 
+            # Mark transaction as started when Aurora Data API cursor() creates one
+            if not was_started and hasattr(self, "_cursor") and self._cursor:
+                if hasattr(self._cursor, "_transaction_id") and self._cursor._transaction_id:
+                    adapt_connection._started = True
 
             try:
-
-                res = await self._cursor.executemany(
-                    operation, seq_of_parameters
-                )
+                res = await self._cursor.executemany(operation, seq_of_parameters)
                 await self._cursor.close()
                 return res
-                
+
             except Exception as error:
                 self._handle_exception(error)
 
@@ -357,9 +361,7 @@ class AsyncAdapt_asyncpg_cursor:
         )
 
     def executemany(self, operation, seq_of_parameters):
-        return self._adapt_connection.await_(
-            self._executemany(operation, seq_of_parameters)
-        )
+        return self._adapt_connection.await_(self._executemany(operation, seq_of_parameters))
 
     def setinputsizes(self, *inputsizes):
         raise NotImplementedError()
@@ -422,9 +424,7 @@ class AsyncAdapt_asyncpg_connection(AdaptedConnection):
         self._execute_mutex = asyncio.Lock()
 
         if prepared_statement_cache_size:
-            self._prepared_statement_cache = util.LRUCache(
-                prepared_statement_cache_size
-            )
+            self._prepared_statement_cache = util.LRUCache(prepared_statement_cache_size)
         else:
             self._prepared_statement_cache = None
 
@@ -443,9 +443,7 @@ class AsyncAdapt_asyncpg_connection(AdaptedConnection):
 
         cache = self._prepared_statement_cache
         if cache is None:
-            prepared_stmt = await self._connection.prepare(
-                operation, name=self._prepared_statement_name_func()
-            )
+            prepared_stmt = await self._connection.prepare(operation, name=self._prepared_statement_name_func())
             attributes = prepared_stmt.get_attributes()
             return prepared_stmt, attributes
 
@@ -461,9 +459,7 @@ class AsyncAdapt_asyncpg_connection(AdaptedConnection):
             if cached_timestamp > invalidate_timestamp:
                 return prepared_stmt, attributes
 
-        prepared_stmt = await self._connection.prepare(
-            operation, name=self._prepared_statement_name_func()
-        )
+        prepared_stmt = await self._connection.prepare(operation, name=self._prepared_statement_name_func())
         attributes = prepared_stmt.get_attributes()
         cache[operation] = (prepared_stmt, attributes, time.time())
 
@@ -570,17 +566,37 @@ class AsyncAdapt_asyncpg_connection(AdaptedConnection):
     def rollback(self):
         if self._started:
             try:
+                # For Aurora Data API, rollback the actual connection
+                if hasattr(self._connection, "rollback"):
+                    self.await_(self._connection.rollback())
+                    self._started = False
+                    self._transaction = None
+                    return
+                # Original asyncpg path
                 self.await_(self._rollback_and_discard())
                 self._transaction = None
                 self._started = False
             except Exception as error:
-                # don't dereference asyncpg transaction if we didn't
-                # actually try to call rollback() on it
-                self._handle_exception(error)
+                # Handle case where _transaction is None
+                if "_transaction" in str(error) and "NoneType" in str(error):
+                    # Transaction already rolled back or doesn't exist
+                    self._started = False
+                    self._transaction = None
+                else:
+                    # don't dereference asyncpg transaction if we didn't
+                    # actually try to call rollback() on it
+                    self._handle_exception(error)
 
     def commit(self):
         if self._started:
             try:
+                # For Aurora Data API, commit the actual connection
+                if hasattr(self._connection, "commit"):
+                    self.await_(self._connection.commit())
+                    self._started = False
+                    self._transaction = None
+                    return
+                # Original asyncpg path # FIXME: Do we need this?
                 self.await_(self._commit_and_discard())
                 self._transaction = None
                 self._started = False
@@ -590,7 +606,18 @@ class AsyncAdapt_asyncpg_connection(AdaptedConnection):
                 self._handle_exception(error)
 
     def close(self):
-        self.rollback()
+        # Only rollback if we have an uncommitted transaction
+        if self._started:
+            # For Aurora Data API, try to commit pending transactions
+            try:
+                self.commit()
+            except Exception:
+                # If commit fails, then rollback
+                try:
+                    self.rollback()
+                except Exception:
+                    # Ignore rollback failures during close
+                    pass
 
         self.await_(self._connection.close())
 
@@ -606,7 +633,7 @@ class AsyncAdapt_asyncpg_connection(AdaptedConnection):
                 asyncio.TimeoutError,
                 asyncio.CancelledError,
                 OSError,
-                self.dbapi.asyncpg.PostgresError, # FIXME
+                self.dbapi.asyncpg.PostgresError,  # FIXME
             ) as e:
                 # in the case where we are recycling an old connection
                 # that may have already been disconnected, close() will
@@ -626,6 +653,7 @@ class AsyncAdapt_asyncpg_connection(AdaptedConnection):
     def _default_name_func():
         return None
 
+
 class AsyncAdaptFallback_asyncpg_connection(AsyncAdapt_asyncpg_connection):
     __slots__ = ()
 
@@ -640,12 +668,8 @@ class AsyncAdapt_asyncpg_dbapi:
     def connect(self, *arg, **kw):
         async_fallback = kw.pop("async_fallback", False)
         creator_fn = kw.pop("async_creator_fn", self.aurora_data_api_async.connect)
-        prepared_statement_cache_size = kw.pop(
-            "prepared_statement_cache_size", 100
-        )
-        prepared_statement_name_func = kw.pop(
-            "prepared_statement_name_func", None
-        )
+        prepared_statement_cache_size = kw.pop("prepared_statement_cache_size", 100)
+        prepared_statement_name_func = kw.pop("prepared_statement_name_func", None)
 
         if util.asbool(async_fallback):
             return AsyncAdaptFallback_asyncpg_connection(
@@ -661,7 +685,7 @@ class AsyncAdapt_asyncpg_dbapi:
                 prepared_statement_cache_size=prepared_statement_cache_size,
                 prepared_statement_name_func=prepared_statement_name_func,
             )
-    
+
     class Error(Exception):  # FIXME
         pass
 
@@ -699,7 +723,6 @@ class AuroraPostgresDataAPIDialectAsync(AuroraPostgresDataAPIDialect):
     # def import_dbapi(cls):
     #     return AsyncAdapt_asyncpg_dbapi(__import__("asyncpg"))
 
-
     # @classmethod
     # def import_dbapi(cls):
     #     import aurora_data_api.async_
@@ -708,8 +731,8 @@ class AuroraPostgresDataAPIDialectAsync(AuroraPostgresDataAPIDialect):
     @classmethod
     def import_dbapi(cls):
         import aurora_data_api.async_
-        return AsyncAdapt_asyncpg_dbapi(aurora_data_api.async_)
 
+        return AsyncAdapt_asyncpg_dbapi(aurora_data_api.async_)
 
 
 def register_dialects():
