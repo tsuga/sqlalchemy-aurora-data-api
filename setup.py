@@ -18,6 +18,8 @@ setup(
         "sqlalchemy.dialects": [
             "mysql.auroradataapi = sqlalchemy_aurora_data_api:AuroraMySQLDataAPIDialect",
             "postgresql.auroradataapi = sqlalchemy_aurora_data_api:AuroraPostgresDataAPIDialect",
+            "mysql.auroradataapiasync = sqlalchemy_aurora_data_api:AsyncAuroraMySQLDataAPIDialect",
+            "postgresql.auroradataapiasync = sqlalchemy_aurora_data_api:AsyncAuroraPostgresDataAPIDialect",
         ]
     },
     platforms=["MacOS X", "Posix"],

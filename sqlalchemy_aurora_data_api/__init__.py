@@ -3,6 +3,7 @@ sqlalchemy-aurora-data-api
 """
 
 from .sync import AuroraMySQLDataAPIDialect, AuroraPostgresDataAPIDialect
+from .async_ import AsyncAuroraMySQLDataAPIDialect, AsyncAuroraPostgresDataAPIDialect
 
 # compatibility export
 from .base import (
@@ -21,5 +22,10 @@ from .base import (
 def register_dialects():
     from sqlalchemy.dialects import registry
 
+    # Sync dialects
     registry.register("mysql.auroradataapi", __name__, AuroraMySQLDataAPIDialect.__name__)
     registry.register("postgresql.auroradataapi", __name__, AuroraPostgresDataAPIDialect.__name__)
+
+    # Async dialects
+    registry.register("mysql.auroradataapiasync", __name__, AsyncAuroraMySQLDataAPIDialect.__name__)
+    registry.register("postgresql.auroradataapiasync", __name__, AsyncAuroraPostgresDataAPIDialect.__name__)
