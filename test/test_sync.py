@@ -179,7 +179,13 @@ class TestAuroraDataAPIPostgresDialect(TestAuroraDataAPI):
     def setUpClass(cls):
         register_dialects()
         cls.db_name = os.environ.get("AURORA_DB_NAME", __name__)
-        cls.engine = create_engine(cls.dialect + ":@/" + cls.db_name)
+        cls.engine = create_engine(
+            cls.dialect + ":@/" + cls.db_name,
+            connect_args={
+                "aurora_cluster_arn": os.environ.get("AURORA_CLUSTER_ARN"),
+                "secret_arn": os.environ.get("SECRET_ARN"),
+            },
+        )
 
     def test_execute(self):
         with self.engine.connect() as conn:
