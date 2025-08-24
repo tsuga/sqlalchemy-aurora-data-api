@@ -158,11 +158,17 @@ class User(Base):
 
 
 class TestAuroraDataAPI(unittest.TestCase):
+    # Base class: False, subclasses: True
+    _run_tests = False
+
     @classmethod
     def tearDownClass(cls):
         pass
 
     def test_interface_conformance(self):
+        if not self._run_tests:
+            self.skipTest("Base class test - only run in subclasses")
+
         for attr in dialect_interface_attributes:
             self.assertIn(attr, dir(self.engine.dialect))
 
@@ -173,6 +179,7 @@ class TestAuroraDataAPI(unittest.TestCase):
 
 class TestAuroraDataAPIPostgresDialect(TestAuroraDataAPI):
     dialect = "postgresql+auroradataapi://"
+    _run_tests = True  # Enable test execution in subclass
     # dialect = "postgresql+psycopg2://" + getpass.getuser()
 
     @classmethod
@@ -263,6 +270,7 @@ class TestAuroraDataAPIPostgresDialect(TestAuroraDataAPI):
 
 class TestAuroraDataAPIMySQLDialect(TestAuroraDataAPI):
     dialect = "mysql+auroradataapi://"
+    _run_tests = True  # Enable test execution in subclass
 
     @classmethod
     def setUpClass(cls):
