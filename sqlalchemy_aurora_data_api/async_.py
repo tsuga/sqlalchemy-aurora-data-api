@@ -56,47 +56,15 @@ class AsyncAdapt_aurora_data_api_connection(AsyncAdapt_dbapi_connection):
 
     def close(self) -> None:
         """Close the connection."""
-        try:
-            if hasattr(self._connection, "close") and callable(self._connection.close):
-                # Check if we're in a running event loop context
-                import asyncio
-
-                try:
-                    # Try to get current running loop
-                    loop = asyncio.get_running_loop()
-                    if loop.is_closed():
-                        # If loop is closed, don't attempt async cleanup
-                        return
-                except RuntimeError:
-                    # No running loop, can't perform async cleanup
-                    return
-
-                self.await_(self._connection.close())
-        except (RuntimeError, Exception) as e:
-            # Handle cases where event loop is closed or other cleanup issues
-            if "Event loop is closed" not in str(e) and "no running event loop" not in str(e):
-                # Re-raise unexpected errors
-                import warnings
-
-                warnings.warn(f"Error during connection cleanup: {e}", RuntimeWarning)
+        self.await_(self._connection.close())
 
     def commit(self) -> None:
         """Commit the transaction."""
-        try:
-            if hasattr(self._connection, "commit") and callable(self._connection.commit):
-                self.await_(self._connection.commit())
-        except (RuntimeError, Exception) as e:
-            if "Event loop is closed" not in str(e):
-                raise
+        self.await_(self._connection.commit())
 
     def rollback(self) -> None:
         """Roll back the transaction."""
-        try:
-            if hasattr(self._connection, "rollback") and callable(self._connection.rollback):
-                self.await_(self._connection.rollback())
-        except (RuntimeError, Exception) as e:
-            if "Event loop is closed" not in str(e):
-                raise
+        self.await_(self._connection.rollback())
 
 
 class AsyncAdaptFallback_aurora_data_api_connection(AsyncAdapt_aurora_data_api_connection):
@@ -148,21 +116,40 @@ class AsyncAdapt_aurora_data_api_dbapi(AsyncAdapt_dbapi_module):
             if hasattr(self.aurora_data_api_async, name):
                 setattr(self, name, getattr(self.aurora_data_api_async, name))
 
+    async def _create_rds_client(self):
+        """Create a fresh RDS client for the current event loop."""
+        import aiobotocore.session
+
+        session = aiobotocore.session.get_session()
+        client_context = session.create_client("rds-data")
+        return await client_context.__aenter__(), client_context
+
     def connect(self, *args: Any, **kwargs: Any) -> AsyncAdapt_aurora_data_api_connection:
         """Create an async connection."""
         async_fallback = kwargs.pop("async_fallback", False)
         creator_fn = kwargs.pop("async_creator_fn", self.aurora_data_api_async.connect)
 
+        # Create a custom connection creation function that sets up the RDS client
+        async def create_connection_with_client(*args, **kwargs):
+            client, client_context = await self._create_rds_client()
+            kwargs["rds_data_client"] = client
+            connection = await creator_fn(*args, **kwargs)
+            # Store the client context for cleanup
+            connection._client_context_for_cleanup = client_context
+            return connection
+
         if util.asbool(async_fallback):
-            return AsyncAdaptFallback_aurora_data_api_connection(
+            conn = AsyncAdaptFallback_aurora_data_api_connection(
                 self,
-                await_fallback(creator_fn(*args, **kwargs)),
+                await_fallback(create_connection_with_client(*args, **kwargs)),
             )
         else:
-            return AsyncAdapt_aurora_data_api_connection(
+            conn = AsyncAdapt_aurora_data_api_connection(
                 self,
-                await_only(creator_fn(*args, **kwargs)),
+                await_only(create_connection_with_client(*args, **kwargs)),
             )
+
+        return conn
 
 
 class AsyncAuroraMySQLDataAPIDialect(MySQLDialect):
@@ -203,34 +190,6 @@ class AsyncAuroraMySQLDataAPIDialect(MySQLDialect):
             return pool.FallbackAsyncAdaptedQueuePool
         else:
             return pool.AsyncAdaptedQueuePool
-
-    def on_connect(self):
-        """Return a callable that will be executed on each new connection."""
-
-        def on_connect_impl(dbapi_connection, connection_record):
-            # Ensure proper cleanup on connection close
-            def cleanup():
-                try:
-                    if hasattr(dbapi_connection, "_connection"):
-                        # Access the underlying Aurora Data API connection
-                        aurora_conn = dbapi_connection._connection
-                        if hasattr(aurora_conn, "close"):
-                            # Schedule cleanup but don't wait for it to complete
-                            import asyncio
-
-                            try:
-                                loop = asyncio.get_running_loop()
-                                if not loop.is_closed():
-                                    asyncio.create_task(aurora_conn.close())
-                            except RuntimeError:
-                                pass  # No running loop, skip cleanup
-                except Exception:
-                    pass  # Ignore cleanup errors
-
-            # Register cleanup callback
-            connection_record.info.setdefault("cleanup_callbacks", []).append(cleanup)
-
-        return on_connect_impl
 
     def _detect_charset(self, connection):
         """Detect charset from connection."""
