@@ -1,6 +1,6 @@
 from sqlalchemy import util
 import sqlalchemy.sql.sqltypes as sqltypes
-from sqlalchemy.dialects.postgresql.base import PGDialect
+from sqlalchemy.dialects.postgresql.base import PGDialect, PGInspector
 from sqlalchemy.dialects.postgresql import JSON, JSONB, UUID, ARRAY
 from sqlalchemy.dialects.mysql.base import MySQLDialect
 from .base import (
@@ -44,6 +44,10 @@ class AuroraMySQLDataAPIDialect(MySQLDialect):
         return exception.args[0].value
 
 
+class AuroraPostgresDataAPIInspector(PGInspector):
+    pass
+
+
 class AuroraPostgresDataAPIDialect(PGDialect):
     # See https://docs.sqlalchemy.org/en/13/core/internals.html#sqlalchemy.engine.interfaces.Dialect
     driver = "aurora_data_api"
@@ -64,6 +68,7 @@ class AuroraPostgresDataAPIDialect(PGDialect):
     )
     supports_sane_multi_rowcount = False
     supports_statement_cache = True
+    inspector = AuroraPostgresDataAPIInspector
 
     @classmethod
     def import_dbapi(cls):
