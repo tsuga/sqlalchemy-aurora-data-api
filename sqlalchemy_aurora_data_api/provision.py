@@ -10,7 +10,10 @@ from sqlalchemy.testing.provision import (
     drop_db,
     temp_table_keyword_args,
     configure_follower,
+    post_configure_engine,
+    set_default_schema_on_connection,
 )
+from sqlalchemy import text
 
 log = logging.getLogger(__name__)
 
@@ -60,3 +63,34 @@ def _aurora_configure_follower(config, ident):
     # Aurora doesn't need special follower configuration
     # Use the same database configuration
     log.info(f"Aurora: Configuring follower for {ident}")
+
+
+@set_default_schema_on_connection.for_db("aurora")
+def _aurora_set_default_schema_on_connection(cfg, dbapi_connection, schema_name):
+    """Set default schema on Aurora connection."""
+    # For Aurora PostgreSQL, set the search_path like standard PostgreSQL
+    try:
+        cursor = dbapi_connection.cursor()
+        cursor.execute(f"SET search_path = '{schema_name}'")
+        log.info(f"Aurora: Set search_path to {schema_name}")
+    except Exception as e:
+        log.warning(f"Aurora: Failed to set search_path to {schema_name}: {e}")
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+
+
+@post_configure_engine.for_db("aurora")
+def _aurora_post_configure_engine(url, engine, follower_ident):
+    """Create test schemas after engine configuration."""
+    log.info("Aurora: Creating test schemas")
+
+    try:
+        with engine.begin() as conn:
+            # Create test schemas if they don't exist
+            conn.execute(text("CREATE SCHEMA IF NOT EXISTS test_schema"))
+            conn.execute(text("CREATE SCHEMA IF NOT EXISTS test_schema_2"))
+            log.info("Aurora: Successfully created test schemas")
+    except Exception as e:
+        log.warning(f"Aurora: Failed to create test schemas: {e}")
+        # This might not be fatal if schemas already exist
