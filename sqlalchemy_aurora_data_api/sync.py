@@ -43,6 +43,37 @@ class AuroraMySQLDataAPIDialect(MySQLDialect):
     def _extract_error_code(self, exception):
         return exception.args[0].value
 
+    def create_connect_args(self, url, _translate_args=None):
+        """Create connection arguments from URL."""
+        opts = url.translate_connect_args(username="user")
+        opts.update(url.query)
+
+        # Map URL parameters to aurora-data-api parameters
+        connect_args = {}
+        if "aurora_cluster_arn" in opts:
+            connect_args["aurora_cluster_arn"] = opts.pop("aurora_cluster_arn")
+        if "secret_arn" in opts:
+            connect_args["secret_arn"] = opts.pop("secret_arn")
+        if "database" in opts:
+            connect_args["database"] = opts.pop("database")
+        elif "dbname" in opts:
+            connect_args["database"] = opts.pop("dbname")
+        if "charset" in opts:
+            connect_args["charset"] = opts.pop("charset")
+
+        # Remove standard connection parameters that aurora-data-api doesn't use
+        opts.pop("host", None)
+        opts.pop("port", None)
+        opts.pop("user", None)
+        opts.pop("password", None)
+
+        return [], connect_args
+
+    @classmethod
+    def load_provisioning(cls):
+        """Load provisioning hooks for Aurora dialect testing."""
+        __import__("sqlalchemy_aurora_data_api.provision")
+
 
 class AuroraPostgresDataAPIInspector(PGInspector):
     pass
@@ -76,3 +107,32 @@ class AuroraPostgresDataAPIDialect(PGDialect):
 
     def _extract_error_code(self, exception):
         return exception.args[0].value
+
+    def create_connect_args(self, url, _translate_args=None):
+        """Create connection arguments from URL."""
+        opts = url.translate_connect_args(username="user")
+        opts.update(url.query)
+
+        # Map URL parameters to aurora-data-api parameters
+        connect_args = {}
+        if "aurora_cluster_arn" in opts:
+            connect_args["aurora_cluster_arn"] = opts.pop("aurora_cluster_arn")
+        if "secret_arn" in opts:
+            connect_args["secret_arn"] = opts.pop("secret_arn")
+        if "database" in opts:
+            connect_args["database"] = opts.pop("database")
+        elif "dbname" in opts:
+            connect_args["database"] = opts.pop("dbname")
+
+        # Remove standard connection parameters that aurora-data-api doesn't use
+        opts.pop("host", None)
+        opts.pop("port", None)
+        opts.pop("user", None)
+        opts.pop("password", None)
+
+        return [], connect_args
+
+    @classmethod
+    def load_provisioning(cls):
+        """Load provisioning hooks for Aurora dialect testing."""
+        __import__("sqlalchemy_aurora_data_api.provision")
