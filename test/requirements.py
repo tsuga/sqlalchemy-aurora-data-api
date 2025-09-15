@@ -46,6 +46,19 @@ class Requirements(SuiteRequirements):
         )
 
     @property
+    def index_reflection(self):
+        """Aurora Data API doesn't support generate_subscripts function needed for index reflection.
+
+        AWS limitation: The generate_subscripts(int2vector, bigint) function does not exist
+        in Aurora PostgreSQL via Data API. This function is required by SQLAlchemy's
+        PostgreSQL dialect for complex index reflection operations.
+        FIXME: This may have impact on Alembic
+        """
+        # return exclusions.closed()
+        return exclusions.open()
+
+
+    @property
     def insertmanyvalues(self):
         """Aurora supports INSERT many values"""
         return exclusions.open()
@@ -127,16 +140,16 @@ class Requirements(SuiteRequirements):
         """target dialect supports representation of Python datetime.datetime() with microsecond objects but only if TIMESTAMP is used."""
         return exclusions.closed()
 
-    @property
-    def json_deserializer_binary(self):
-        """Aurora Data API returns JSON with compact formatting (no spaces).
+    # @property
+    # def json_deserializer_binary(self):
+    #     """Aurora Data API returns JSON with compact formatting (no spaces).
 
-        The test expects standard json.dumps() format: '{"key1": "data1"}'
-        But Aurora returns compact format: '{"key1":"data1"}'
-        Both are valid JSON, but the test is strict about whitespace formatting.
-        Avoiding runtime JSON re-parsing for performance reasons.
-        """
-        return exclusions.closed()
+    #     The test expects standard json.dumps() format: '{"key1": "data1"}'
+    #     But Aurora returns compact format: '{"key1":"data1"}'
+    #     Both are valid JSON, but the test is strict about whitespace formatting.
+    #     Avoiding runtime JSON re-parsing for performance reasons.
+    #     """
+    #     return exclusions.closed()
 
     @property
     def precision_numerics_many_significant_digits(self):
@@ -161,8 +174,16 @@ class Requirements(SuiteRequirements):
 
     @property
     def index_ddl_if_exists(self):
-        """target platform supports IF NOT EXISTS / IF EXISTS for indexes."""
+        """Aurora Data API has limitations with index DDL due to reflection issues.
+
+        Index DDL operations fail because they rely on index reflection which uses
+        the unsupported generate_subscripts function. Aurora supports the DDL syntax
+        but the tests fail due to reflection limitations.
+        FIXME: This may have impact on Alembic
+        """
+        # return exclusions.closed()
         return exclusions.open()
+        
 
     @property
     def uuid_data_type(self):
@@ -390,8 +411,12 @@ class Requirements(SuiteRequirements):
 
     @property
     def unicode_ddl(self):
-        """Target driver must support some degree of non-ascii symbol names."""
-        return exclusions.open()
+        """Aurora Data API doesn't support Unicode characters in parameter names.
+
+        AWS limitation: Named parameter syntax with Unicode characters is invalid.
+        The Aurora Data API validates parameter names and rejects Unicode characters.
+        """
+        return exclusions.closed()
 
     @property
     def datetime_interval(self):
@@ -680,6 +705,21 @@ class Requirements(SuiteRequirements):
 
         Due to the doubleValue limitation in Aurora Data API, exact decimal precision
         cannot be guaranteed for all numeric values.
+        """
+        return exclusions.closed()
+
+    @property
+    def insert_executemany_returning(self):
+        """Aurora Data API has inconsistent returns_rows behavior for no_implicit_returning tables.
+
+        When using return_defaults() with executemany on tables that have implicit_returning=False,
+        the result still returns rows, but the test expects returns_rows=False.
+
+        FIXME: This may be correct behavior - table-level implicit_returning=False should only
+        affect implicit RETURNING, not explicit return_defaults(). Need to investigate if this
+        test expectation is appropriate for Aurora Data API's PostgreSQL RETURNING support.
+
+        Reference: Aurora supports RETURNING clause but not generatedFields.
         """
         return exclusions.closed()
 

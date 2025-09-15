@@ -109,10 +109,11 @@ class AuroraPostgresDataAPIDialect(PGDialect):
     supports_distinct_on = True
 
     # Aurora Data API PostgreSQL limitations
-    # The generatedFields feature is not supported, so we can't use
-    # implicit RETURNING for INSERT statements
-    insert_returning = False
-    supports_lastrowid = False
+    # The generatedFields feature is not supported, but RETURNING clause is supported
+    # Reference: "To get the values of generated fields, use the RETURNING clause"
+    insert_returning = True  # RETURNING clause is supported
+    supports_lastrowid = False  # generatedFields is not supported
+    supports_returning = True  # RETURNING clause is supported
 
     inspector = AuroraPostgresDataAPIInspector
 
