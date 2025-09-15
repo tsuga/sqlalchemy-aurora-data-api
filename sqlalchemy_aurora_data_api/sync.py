@@ -1,8 +1,12 @@
-from sqlalchemy import util
+from sqlalchemy import select, util, sql, exc as sqlalchemy_exc
 import sqlalchemy.sql.sqltypes as sqltypes
-from sqlalchemy.dialects.postgresql.base import PGDialect, PGInspector
+from sqlalchemy.dialects.postgresql.base import PGDialect
 from sqlalchemy.dialects.postgresql import JSON, JSONB, UUID, ARRAY
 from sqlalchemy.dialects.mysql.base import MySQLDialect
+from sqlalchemy.util import memoized_property
+
+import re
+from .columns_override import _columns_query_override
 from .base import (
     _ADA_ARRAY,
     _ADA_DATE,
@@ -77,9 +81,48 @@ class AuroraMySQLDataAPIDialect(MySQLDialect):
         """Load provisioning hooks for Aurora dialect testing."""
         __import__("sqlalchemy_aurora_data_api.provision")
 
+    @memoized_property
+    def dbapi_exception_translation_map(self):
+        """Map Aurora Data API exceptions to SQLAlchemy exceptions."""
+        import aurora_data_api.exceptions as ada_exc
 
-class AuroraPostgresDataAPIInspector(PGInspector):
-    pass
+        return {
+            ada_exc.IntegrityError: sqlalchemy_exc.IntegrityError,
+            ada_exc.DataError: sqlalchemy_exc.DataError,
+            ada_exc.OperationalError: sqlalchemy_exc.OperationalError,
+            ada_exc.ProgrammingError: sqlalchemy_exc.ProgrammingError,
+            ada_exc.NotSupportedError: sqlalchemy_exc.NotSupportedError,
+            ada_exc.InternalError: sqlalchemy_exc.InternalError,
+            ada_exc.InterfaceError: sqlalchemy_exc.InterfaceError,
+            ada_exc.DatabaseError: sqlalchemy_exc.DatabaseError,
+        }
+
+    def _handle_dbapi_exception(self, e):
+        """Handle Aurora Data API exception mapping."""
+        if hasattr(e, 'args') and e.args:
+            error_msg = str(e.args[0])
+            # Look for PostgreSQL SQLState codes: "ERROR: ... SQLState: 23505"
+            sqlstate_match = re.search(r'SQLState: (\w+)', error_msg)
+            if sqlstate_match:
+                sqlstate = sqlstate_match.group(1)
+                if sqlstate in ('23505', '23503', '23502', '23514', '23000'):
+                    # Integrity constraint violations -> IntegrityError
+                    import aurora_data_api.exceptions as ada_exc
+                    integrity_error = ada_exc.IntegrityError(error_msg)
+                    if hasattr(e, 'response'):
+                        integrity_error.response = e.response
+                    return integrity_error
+        return e
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+        """Override to handle exception mapping."""
+        try:
+            cursor.execute(statement, parameters)
+        except Exception as e:
+            transformed_e = self._handle_dbapi_exception(e)
+            raise transformed_e from e
+
+
 
 
 class AuroraPostgresDataAPIDialect(PGDialect):
@@ -115,11 +158,12 @@ class AuroraPostgresDataAPIDialect(PGDialect):
     supports_lastrowid = False  # generatedFields is not supported
     supports_returning = True  # RETURNING clause is supported
 
-    inspector = AuroraPostgresDataAPIInspector
 
     @classmethod
     def import_dbapi(cls):
         return aurora_data_api
+
+
 
     def _extract_error_code(self, exception):
         return exception.args[0].value
@@ -141,14 +185,65 @@ class AuroraPostgresDataAPIDialect(PGDialect):
             connect_args["database"] = opts.pop("dbname")
 
         # Remove standard connection parameters that aurora-data-api doesn't use
+        # FIXME: this entire section can be deleted once DB API is updated.
         opts.pop("host", None)
         opts.pop("port", None)
         opts.pop("user", None)
         opts.pop("password", None)
 
+        # Initialize with normal transaction mode
+        connect_args["skip_begin_transaction"] = False
+
         return [], connect_args
+
 
     @classmethod
     def load_provisioning(cls):
         """Load provisioning hooks for Aurora dialect testing."""
         __import__("sqlalchemy_aurora_data_api.provision")
+
+    @memoized_property
+    def dbapi_exception_translation_map(self):
+        """Map Aurora Data API exceptions to SQLAlchemy exceptions."""
+        import aurora_data_api.exceptions as ada_exc
+
+        return {
+            ada_exc.IntegrityError: sqlalchemy_exc.IntegrityError,
+            ada_exc.DataError: sqlalchemy_exc.DataError,
+            ada_exc.OperationalError: sqlalchemy_exc.OperationalError,
+            ada_exc.ProgrammingError: sqlalchemy_exc.ProgrammingError,
+            ada_exc.NotSupportedError: sqlalchemy_exc.NotSupportedError,
+            ada_exc.InternalError: sqlalchemy_exc.InternalError,
+            ada_exc.InterfaceError: sqlalchemy_exc.InterfaceError,
+            ada_exc.DatabaseError: sqlalchemy_exc.DatabaseError,
+        }
+
+    def _handle_dbapi_exception(self, e):
+        """Handle Aurora Data API exception mapping."""
+        if hasattr(e, 'args') and e.args:
+            error_msg = str(e.args[0])
+            # Look for PostgreSQL SQLState codes: "ERROR: ... SQLState: 23505"
+            sqlstate_match = re.search(r'SQLState: (\w+)', error_msg)
+            if sqlstate_match:
+                sqlstate = sqlstate_match.group(1)
+                if sqlstate in ('23505', '23503', '23502', '23514', '23000'):
+                    # Integrity constraint violations -> IntegrityError
+                    import aurora_data_api.exceptions as ada_exc
+                    integrity_error = ada_exc.IntegrityError(error_msg)
+                    if hasattr(e, 'response'):
+                        integrity_error.response = e.response
+                    return integrity_error
+        return e
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+        """Override to handle exception mapping."""
+        try:
+            cursor.execute(statement, parameters)
+        except Exception as e:
+            transformed_e = self._handle_dbapi_exception(e)
+            raise transformed_e from e
+
+
+    def _columns_query(self, schema, has_filter_names, scope, kind):
+        """Override to cast CHAR/name type columns to TEXT for Aurora Data API compatibility."""
+        return _columns_query_override(self, schema, has_filter_names, scope, kind)
