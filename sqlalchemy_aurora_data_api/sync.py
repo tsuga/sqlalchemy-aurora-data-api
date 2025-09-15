@@ -6,6 +6,8 @@ from sqlalchemy.dialects.mysql.base import MySQLDialect
 from .base import (
     _ADA_ARRAY,
     _ADA_DATE,
+    _ADA_DOUBLE,
+    _ADA_FLOAT,
     _ADA_SA_JSON,
     _ADA_JSON,
     _ADA_JSONB,
@@ -97,12 +99,20 @@ class AuroraPostgresDataAPIDialect(PGDialect):
             sqltypes.DateTime: _ADA_TIMESTAMP,
             sqltypes.Enum: _ADA_ENUM,
             sqltypes.Numeric: _ADA_NUMERIC,
+            sqltypes.Float: _ADA_FLOAT,
+            sqltypes.Double: _ADA_DOUBLE,
             ARRAY: _ADA_ARRAY,
         },
     )
     supports_sane_multi_rowcount = False
     supports_statement_cache = True
     supports_distinct_on = True
+
+    # Aurora Data API PostgreSQL limitations
+    # The generatedFields feature is not supported, so we can't use
+    # implicit RETURNING for INSERT statements
+    insert_returning = False
+    supports_lastrowid = False
 
     inspector = AuroraPostgresDataAPIInspector
 

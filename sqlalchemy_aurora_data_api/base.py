@@ -125,13 +125,30 @@ class _ADA_NUMERIC(sqltypes.Numeric):
             if value is None:
                 return value
 
-            # Handle asdecimal=False case: convert Decimal to float
-            if not self.asdecimal and isinstance(value, decimal.Decimal):
-                return float(value)
+            # Aurora Data API returns numeric values as float (doubleValue)
+            # For asdecimal=True (default), convert float to Decimal
+            if self.asdecimal and isinstance(value, float):
+                return decimal.Decimal(str(value))
 
-            # For asdecimal=True, return as-is (Decimal)
+            # Handle asdecimal=False case: return float as-is
+            if not self.asdecimal:
+                if isinstance(value, decimal.Decimal):
+                    return float(value)
+                return float(value) if not isinstance(value, float) else value
+
+            # For other cases (already Decimal), return as-is
             return value
         return process
+
+
+class _ADA_FLOAT(sqltypes.Float):
+    """Aurora Data API Float type to distinguish from Numeric."""
+    pass
+
+
+class _ADA_DOUBLE(sqltypes.Double):
+    """Aurora Data API Double type to distinguish from Numeric."""
+    pass
 
 
 class _ADA_ARRAY(ARRAY):
