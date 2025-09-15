@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional, TYPE_CHECKING
 
 from sqlalchemy import pool, util
 from sqlalchemy.dialects.mysql.base import MySQLDialect
-from sqlalchemy.dialects.postgresql.base import PGDialect
+from sqlalchemy.dialects.postgresql.base import PGDialect, PGInspector
 from sqlalchemy.connectors.asyncio import AsyncAdapt_dbapi_connection
 from sqlalchemy.connectors.asyncio import AsyncAdapt_dbapi_cursor
 from sqlalchemy.connectors.asyncio import AsyncAdapt_dbapi_module
@@ -223,6 +223,13 @@ class AsyncAuroraMySQLDataAPIDialect(MySQLDialect):
 
         return [], connect_args
 
+    @classmethod
+    def load_provisioning(cls):
+        """Load provisioning hooks for Aurora dialect testing."""
+        __import__("sqlalchemy_aurora_data_api.provision")
+
+class AuroraPostgresDataAPIInspector(PGInspector):
+    pass
 
 class AsyncAuroraPostgresDataAPIDialect(PGDialect):
     """Async Aurora PostgreSQL Data API dialect."""
@@ -237,6 +244,8 @@ class AsyncAuroraPostgresDataAPIDialect(PGDialect):
     supports_server_side_cursors = False
     # Aurora Data API doesn't support multi rowcount
     supports_sane_multi_rowcount = False
+    supports_distinct_on = True
+    inspector = AuroraPostgresDataAPIInspector
 
     colspecs = util.update_copy(
         PGDialect.colspecs,
@@ -295,6 +304,11 @@ class AsyncAuroraPostgresDataAPIDialect(PGDialect):
             connect_args["database"] = opts.pop("dbname")
 
         return [], connect_args
+
+    @classmethod
+    def load_provisioning(cls):
+        """Load provisioning hooks for Aurora dialect testing."""
+        __import__("sqlalchemy_aurora_data_api.provision")
 
 
 # Dialect registration will be done in __init__.py

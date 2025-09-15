@@ -99,6 +99,8 @@ class AuroraPostgresDataAPIDialect(PGDialect):
     )
     supports_sane_multi_rowcount = False
     supports_statement_cache = True
+    supports_distinct_on = True
+
     inspector = AuroraPostgresDataAPIInspector
 
     @classmethod
