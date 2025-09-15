@@ -1,5 +1,6 @@
 import datetime
 import re
+import decimal
 
 from sqlalchemy import cast, func
 import sqlalchemy.sql.sqltypes as sqltypes
@@ -24,6 +25,17 @@ class _ADA_JSONB(JSONB):
 class _ADA_UUID(UUID):
     def bind_expression(self, value):
         return cast(value, UUID)
+
+    def result_processor(self, dialect, coltype):
+        import uuid
+        def process(value):
+            if isinstance(value, str):
+                # Check if as_uuid=False was specified
+                if hasattr(self, 'as_uuid') and not self.as_uuid:
+                    return value  # Return as string
+                return uuid.UUID(value)
+            return value
+        return process
 
 
 class _ADA_ENUM(ENUM):
@@ -102,6 +114,23 @@ class _ADA_TIMESTAMP(_ADA_DATETIME_MIXIN, TIMESTAMP):
         def process(value):
             return value.strftime("%Y-%m-%d %H:%M:%S.") + self.ms(value) if isinstance(value, self.py_type) else value
 
+        return process
+
+
+
+
+class _ADA_NUMERIC(sqltypes.Numeric):
+    def result_processor(self, dialect, coltype):
+        def process(value):
+            if value is None:
+                return value
+
+            # Handle asdecimal=False case: convert Decimal to float
+            if not self.asdecimal and isinstance(value, decimal.Decimal):
+                return float(value)
+
+            # For asdecimal=True, return as-is (Decimal)
+            return value
         return process
 
 

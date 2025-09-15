@@ -13,6 +13,7 @@ from .base import (
     _ADA_TIMESTAMP,
     _ADA_UUID,
     _ADA_ENUM,
+    _ADA_NUMERIC,
 )
 
 import aurora_data_api
@@ -90,10 +91,12 @@ class AuroraPostgresDataAPIDialect(PGDialect):
             JSON: _ADA_JSON,
             JSONB: _ADA_JSONB,
             UUID: _ADA_UUID,
+            sqltypes.Uuid: _ADA_UUID,
             sqltypes.Date: _ADA_DATE,
             sqltypes.Time: _ADA_TIME,
             sqltypes.DateTime: _ADA_TIMESTAMP,
             sqltypes.Enum: _ADA_ENUM,
+            sqltypes.Numeric: _ADA_NUMERIC,
             ARRAY: _ADA_ARRAY,
         },
     )
