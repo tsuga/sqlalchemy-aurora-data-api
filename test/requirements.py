@@ -586,8 +586,13 @@ class Requirements(SuiteRequirements):
 
     @property
     def fetch_percent(self):
-        """backend supports the fetch first clause with percent."""
-        return exclusions.open()
+        """Aurora Data API does not support FETCH FIRST with PERCENT.
+
+        Error: "syntax error at or near 'PERCENT'"
+        Aurora PostgreSQL does not fully support the FETCH FIRST n PERCENT syntax.
+        Reference: AWS documentation recommends calculating percentage manually and using LIMIT.
+        """
+        return exclusions.closed()
 
     @property
     def fetch_ties(self):
@@ -601,8 +606,12 @@ class Requirements(SuiteRequirements):
 
     @property
     def fetch_offset_with_options(self):
-        """backend supports the offset when using fetch first with percent or ties. basically this is "not mssql" """
-        return exclusions.open()
+        """Aurora Data API does not support OFFSET with PERCENT options.
+
+        Since FETCH FIRST n PERCENT is not supported, offset with percent options
+        is also not available in Aurora Data API.
+        """
+        return exclusions.closed()
 
     @property
     def fetch_expression(self):
@@ -646,8 +655,12 @@ class Requirements(SuiteRequirements):
 
     @property
     def supports_bitwise_shift(self):
-        """Target database supports bitwise left or right shift"""
-        return exclusions.open()
+        """Aurora Data API does not support bitwise shift operators (<< and >>).
+
+        Error: "operator does not exist: integer << bigint"
+        While PostgreSQL supports these operators, Aurora Data API reports them as undefined.
+        """
+        return exclusions.closed()
 
     # Aurora Data API numeric precision limitations
 
