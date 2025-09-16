@@ -105,8 +105,9 @@ class Requirements(SuiteRequirements):
 
     @property
     def denormalized_names(self):
-        """Aurora may handle denormalized names"""
-        return exclusions.open()
+        """This is more for Oracle
+        """
+        return exclusions.closed()
 
     @property
     def multivalues_inserts(self):

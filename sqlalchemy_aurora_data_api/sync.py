@@ -610,6 +610,9 @@ class AuroraPostgresDataAPIDialect(PGDialect):
                 table_fkeys = fkeys[(schema, table_name)]
 
                 for conname, rows in fkey_d[oid].items():
+                    # AURORA CHANGE: Add defensive check for empty rows to prevent IndexError
+                    if not rows:
+                        continue
                     referred_schema = rows[0]["referred_schema"]
                     referred_table = rows[0]["referred_table"]
                     constrained_columns = [r["constrained_column"] for r in rows]
@@ -879,6 +882,61 @@ class AuroraPostgresDataAPIDialect(PGDialect):
 
         return final_query
 
+    def _reflect_constraint(self, connection, contype, schema, filter_names, scope, kind, **kw):
+        """Override to handle OID casting for Aurora Data API compatibility."""
+        from collections import defaultdict
+
+        # used to reflect primary and unique constraint
+        table_oids = self._get_table_oids(
+            connection, schema, filter_names, scope, kind, **kw
+        )
+        batches = list(table_oids)
+        is_unique = contype == "u"
+
+        while batches:
+            batch = batches[0:3000]
+            batches[0:3000] = []
+
+            # AURORA CHANGE: Convert OIDs to integers for Aurora Data API compatibility (OID type not supported)
+            result = connection.execute(
+                self._constraint_query,
+                {"oids": [int(r[0]) for r in batch], "contype": contype},
+            ).mappings()
+
+            result_by_oid = defaultdict(list)
+            for row_dict in result:
+                result_by_oid[row_dict["conrelid"]].append(row_dict)
+
+            for oid, tablename in batch:
+                for_oid = result_by_oid.get(int(oid), ())
+                if for_oid:
+                    for row in for_oid:
+                        # See note in get_multi_indexes
+                        all_cols = row["cols"]
+                        indnkeyatts = row["indnkeyatts"]
+                        if len(all_cols) > indnkeyatts:
+                            inc_cols = all_cols[indnkeyatts:]
+                            cst_cols = all_cols[:indnkeyatts]
+                        else:
+                            inc_cols = []
+                            cst_cols = all_cols
+
+                        opts = {}
+                        if self.server_version_info >= (11,):
+                            opts["postgresql_include"] = inc_cols
+                        if is_unique:
+                            opts["postgresql_nulls_not_distinct"] = row[
+                                "indnullsnotdistinct"
+                            ]
+                        yield (
+                            tablename,
+                            cst_cols,
+                            row["conname"],
+                            row["description"],
+                            opts,
+                        )
+                else:
+                    yield tablename, None, None, None, None
 
     @util.memoized_property
     def _index_query(self):
@@ -1259,20 +1317,6 @@ class AuroraPostgresDataAPIDialect(PGDialect):
 
         return result_dict
 
-    def normalize_name(self, name):
-        """Normalize name to lowercase for Aurora Data API compatibility.
-
-        Aurora Data API may return names in different case than standard PostgreSQL.
-        PostgreSQL normalizes unquoted identifiers to lowercase, so we ensure
-        that behavior is consistent.
-        """
-        if name is None:
-            return None
-        # AURORA CHANGE: Force lowercase normalization to match PostgreSQL behavior
-        # Aurora Data API may return identifiers in different cases
-        print(f"DEBUG: normalize_name called with: '{name}' -> '{name.lower()}'")
-        return name.lower()
-
     def get_table_options(self, connection, table_name, schema=None, **kw):
         """Return table options for Aurora Data API compatibility.
 
@@ -1340,47 +1384,6 @@ class AuroraPostgresDataAPIDialect(PGDialect):
             query = query.where(pg_catalog.pg_namespace.c.nspname == schema)
         return query
 
-    def get_table_names(self, connection, schema=None, **kw):
-        """Override to ensure name normalization."""
-        from sqlalchemy.engine import reflection
-
-        print(f"DEBUG: get_table_names override called with schema={schema}")
-
-        # Call parent method without cache to see real results
-        from sqlalchemy.dialects.postgresql import pg_catalog
-        from sqlalchemy.engine.reflection import ObjectScope
-
-        result = self._get_relnames_for_relkinds(
-            connection,
-            schema,
-            pg_catalog.RELKINDS_TABLE_NO_FOREIGN,
-            scope=ObjectScope.DEFAULT,
-        )
-        print(f"DEBUG: get_table_names result from _get_relnames_for_relkinds: {result}")
-
-        # Add detailed debugging of what we're returning
-        for i, name in enumerate(result):
-            print(f"DEBUG: get_table_names result[{i}] = {repr(name)} (type: {type(name)})")
-
-        print(f"DEBUG: get_table_names returning: {result}")
-
-        # EXTRA DEBUG: Check if any result contains uppercase letters
-        for name in result:
-            if any(c.isupper() for c in name):
-                print(f"DEBUG: WARNING - Found uppercase in result: {repr(name)}")
-
-        # EXTRA DEBUG: Filter just t1/t2 like the test does
-        test_filtered = [t for t in result if t.lower() in ("t1", "t2")]
-        print(f"DEBUG: Test-filtered result (t.lower() in ('t1', 't2')): {test_filtered}")
-
-        # Add stack trace to see where this is called from
-        import traceback
-        print("DEBUG: Stack trace of get_table_names call:")
-        for line in traceback.format_stack():
-            if 'test_' in line or 'reflection' in line or 'inspector' in line:
-                print(f"  {line.strip()}")
-
-        return result
 
     def _get_relnames_for_relkinds(self, connection, schema, relkinds, scope):
         """Override to ensure name normalization for Aurora Data API.
@@ -1394,16 +1397,13 @@ class AuroraPostgresDataAPIDialect(PGDialect):
         )
         query = self._pg_class_filter_scope_schema(query, schema, scope=scope)
 
-        print(f"DEBUG: _get_relnames_for_relkinds Executing query for scope={scope}")
         result = connection.scalars(query).all()
-        print(f"DEBUG: _get_relnames_for_relkinds Raw result: {result}")
 
         # AURORA CHANGE: Apply name normalization manually for table names
         # Since normalize_name only applies to cursor column names, not result values,
         # we need to normalize table names manually for consistent behavior
         if self.requires_name_normalize:
             normalized_result = [self.normalize_name(name) for name in result]
-            print(f"DEBUG: _get_relnames_for_relkinds Normalized result: {normalized_result}")
             return normalized_result
 
         return result
