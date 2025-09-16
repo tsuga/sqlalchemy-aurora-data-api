@@ -12,8 +12,11 @@ from sqlalchemy.testing.provision import (
     configure_follower,
     post_configure_engine,
     set_default_schema_on_connection,
+    drop_all_schema_objects_pre_tables,
+    drop_all_schema_objects_post_tables,
+    prepare_for_drop_tables,
 )
-from sqlalchemy import text
+from sqlalchemy import text, inspect
 
 log = logging.getLogger(__name__)
 
@@ -52,9 +55,14 @@ def _aurora_drop_db(cfg, eng, ident):
 
 @temp_table_keyword_args.for_db("aurora")
 def _aurora_temp_table_keyword_args(cfg, eng):
-    """Temporary table arguments for Aurora."""
-    # Aurora supports standard temporary tables
-    return {"prefixes": ["TEMPORARY"]}
+    """Temporary table arguments for Aurora.
+
+    Aurora Data API has session handling differences that affect temporary tables.
+    Using ON COMMIT PRESERVE ROWS to ensure temp tables persist within the session.
+    """
+    # Return temporary table configuration for Aurora PostgreSQL
+    # Note: Aurora Data API may have different session semantics than regular PostgreSQL
+    return {"prefixes": ["TEMPORARY"], "postgresql_on_commit": "PRESERVE ROWS"}
 
 
 @configure_follower.for_db("aurora")
@@ -94,3 +102,69 @@ def _aurora_post_configure_engine(url, engine, follower_ident):
     except Exception as e:
         log.warning(f"Aurora: Failed to create test schemas: {e}")
         # This might not be fatal if schemas already exist
+
+
+@drop_all_schema_objects_pre_tables.for_db("aurora")
+def _aurora_drop_all_schema_objects_pre_tables(cfg, eng):
+    """Drop schema objects before tables for Aurora.
+
+    Aurora Data API may have different transaction handling for prepared transactions.
+    """
+    try:
+        with eng.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            # Try to rollback any prepared transactions
+            for xid in conn.exec_driver_sql(
+                "select gid from pg_prepared_xacts"
+            ).scalars():
+                try:
+                    conn.exec_driver_sql("ROLLBACK PREPARED '%s'" % xid)
+                except Exception as e:
+                    log.warning(f"Aurora: Failed to rollback prepared transaction {xid}: {e}")
+    except Exception as e:
+        log.warning(f"Aurora: Failed to check prepared transactions: {e}")
+
+
+@drop_all_schema_objects_post_tables.for_db("aurora")
+def _aurora_drop_all_schema_objects_post_tables(cfg, eng):
+    """Drop schema objects after tables for Aurora."""
+    from sqlalchemy.dialects import postgresql
+
+    try:
+        inspector = inspect(eng)
+        with eng.begin() as conn:
+            for enum in inspector.get_enums("*"):
+                try:
+                    conn.execute(
+                        postgresql.DropEnumType(
+                            postgresql.ENUM(name=enum["name"], schema=enum["schema"])
+                        )
+                    )
+                except Exception as e:
+                    log.warning(f"Aurora: Failed to drop enum {enum['name']}: {e}")
+    except Exception as e:
+        log.warning(f"Aurora: Failed to drop schema objects: {e}")
+
+
+@prepare_for_drop_tables.for_db("aurora")
+def _aurora_prepare_for_drop_tables(config, connection):
+    """Prepare for dropping tables in Aurora.
+
+    Aurora Data API may have different locking behavior than standard PostgreSQL.
+    """
+    try:
+        result = connection.exec_driver_sql(
+            "select pid, state, wait_event_type, query "
+            "from pg_stat_activity where "
+            "usename=current_user "
+            "and datname=current_database() and state='idle in transaction' "
+            "and pid != pg_backend_pid()"
+        )
+        rows = result.all()
+        if rows:
+            log.warning(
+                "Aurora: PostgreSQL may not be able to DROP tables due to "
+                "idle in transaction: %s"
+                % ("; ".join(row._mapping["query"] for row in rows))
+            )
+    except Exception as e:
+        log.warning(f"Aurora: Failed to check for idle transactions: {e}")
