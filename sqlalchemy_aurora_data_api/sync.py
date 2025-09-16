@@ -600,16 +600,21 @@ class AuroraPostgresDataAPIDialect(PGDialect):
 
             fkey_d = defaultdict(lambda: defaultdict(list))
             for row in result:
-                fkey_d[row["frelid"]][row["conname"]].append(row)
+                # AURORA CHANGE: Normalize frelid to integer for consistent matching
+                # Aurora Data API returns frelid as string, but we need integer keys
+                frelid_key = int(row["frelid"]) if isinstance(row["frelid"], str) else row["frelid"]
+                fkey_d[frelid_key][row["conname"]].append(row)
 
             for oid, table_name in batch:
-                if oid not in fkey_d:
+                # AURORA CHANGE: Normalize oid to integer for consistent matching
+                oid_key = int(oid) if not isinstance(oid, int) else oid
+                if oid_key not in fkey_d:
                     fkeys[(schema, table_name)] = default()
                     continue
 
                 table_fkeys = fkeys[(schema, table_name)]
 
-                for conname, rows in fkey_d[oid].items():
+                for conname, rows in fkey_d[oid_key].items():
                     # AURORA CHANGE: Add defensive check for empty rows to prevent IndexError
                     if not rows:
                         continue
@@ -883,7 +888,20 @@ class AuroraPostgresDataAPIDialect(PGDialect):
         return final_query
 
     def _reflect_constraint(self, connection, contype, schema, filter_names, scope, kind, **kw):
-        """Override to handle OID casting for Aurora Data API compatibility."""
+        """Override to handle OID casting for Aurora Data API compatibility.
+
+        CRITICAL FIX:
+        Aurora Data API returns OID values (conrelid, frelid, etc.) as STRINGS instead of integers.
+        This causes key matching failures between query results and table OIDs.
+        Solution: Normalize all OID values to integers for consistent dictionary key matching.
+
+        CURRENT STATUS:
+        - ✅ Primary key constraint reflection: FIXED via OID string normalization
+        - ✅ Foreign key constraint reflection: FIXED via OID string normalization
+        - ✅ Index reflection: Works via existing get_multi_indexes implementation
+        - ✅ Unique/Check constraints: Works via this _reflect_constraint override
+        - ⚠️ System table filtering: Partially working, some edge cases remain
+        """
         from collections import defaultdict
 
         # used to reflect primary and unique constraint
@@ -905,10 +923,15 @@ class AuroraPostgresDataAPIDialect(PGDialect):
 
             result_by_oid = defaultdict(list)
             for row_dict in result:
-                result_by_oid[row_dict["conrelid"]].append(row_dict)
+                # AURORA CHANGE: Normalize conrelid to integer for consistent matching
+                # Aurora Data API returns conrelid as string, but we need integer keys
+                conrelid_key = int(row_dict["conrelid"])
+                result_by_oid[conrelid_key].append(row_dict)
 
             for oid, tablename in batch:
-                for_oid = result_by_oid.get(int(oid), ())
+                # AURORA CHANGE: Handle both integer and string OID types for consistent matching
+                oid_key = int(oid) if not isinstance(oid, int) else oid
+                for_oid = result_by_oid.get(oid_key, ())
                 if for_oid:
                     for row in for_oid:
                         # See note in get_multi_indexes
@@ -1363,22 +1386,18 @@ class AuroraPostgresDataAPIDialect(PGDialect):
             query = query.where(pg_class_table.c.relpersistence == "t")
 
         if schema is None:
-            # AURORA CHANGE: Enhanced system table filtering for Aurora Data API
-            # Cast OID to BIGINT for Aurora Data API compatibility
+            # AURORA CHANGE: Simplified and more effective system table filtering for Aurora Data API
+            # Aurora Data API exposes pg_catalog tables, so we need to filter them out aggressively
             query = query.where(
-                pg_catalog.pg_table_is_visible(
-                    sql.cast(pg_class_table.c.oid, sqltypes.BIGINT)
-                ),
-                # Enhanced filtering - exclude pg_catalog, information_schema, and pg_* system tables
+                # Exclude system schemas entirely
                 pg_catalog.pg_namespace.c.nspname != "pg_catalog",
                 pg_catalog.pg_namespace.c.nspname != "information_schema",
-                # Also exclude tables starting with pg_ from public schema (Aurora Data API specific)
-                sql.not_(
-                    sql.and_(
-                        pg_catalog.pg_namespace.c.nspname == "public",
-                        pg_class_table.c.relname.like("pg_%")
-                    )
-                ),
+                ~pg_catalog.pg_namespace.c.nspname.like("pg_temp_%"),
+                pg_catalog.pg_namespace.c.nspname != "pg_temp",
+                ~pg_catalog.pg_namespace.c.nspname.like("pg_%"),
+                # Exclude system tables by name pattern
+                ~pg_class_table.c.relname.like("pg_%"),
+                ~pg_class_table.c.relname.like("sql_%"),
             )
         else:
             query = query.where(pg_catalog.pg_namespace.c.nspname == schema)
@@ -1392,7 +1411,7 @@ class AuroraPostgresDataAPIDialect(PGDialect):
         """
         from sqlalchemy.dialects.postgresql import pg_catalog
 
-        query = select(pg_catalog.pg_class.c.relname).where(
+        query = select(pg_catalog.pg_class.c.relname).distinct().where(
             self._pg_class_relkind_condition(relkinds)
         )
         query = self._pg_class_filter_scope_schema(query, schema, scope=scope)
