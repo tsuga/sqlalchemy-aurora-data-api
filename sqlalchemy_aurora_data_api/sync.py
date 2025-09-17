@@ -413,9 +413,20 @@ class AuroraPostgresDataAPIDialect(PGDialect):
             return []
 
         try:
-            # Split by whitespace and convert to integers
-            return [int(x) for x in indoption_text.strip().split()]
-        except (ValueError, AttributeError):
+            # Handle both space-separated and array-like formats
+            text = str(indoption_text).strip()
+
+            # Remove array brackets if present: "{0,0,0}" -> "0,0,0"
+            if text.startswith('{') and text.endswith('}'):
+                text = text[1:-1]
+                # Split by comma for array format
+                parts = [x.strip() for x in text.split(',') if x.strip()]
+            else:
+                # Split by whitespace for space-separated format
+                parts = [x.strip() for x in text.split() if x.strip()]
+
+            return [int(x) for x in parts if x]
+        except (ValueError, AttributeError, TypeError):
             # If parsing fails, return empty list (no special sorting)
             return []
 
@@ -455,21 +466,28 @@ class AuroraPostgresDataAPIDialect(PGDialect):
             batches[0:3000] = []
 
             # AURORA CHANGE: Convert OIDs to integers for Aurora Data API compatibility (OID type not supported)
+            oids_param = [int(r[0]) for r in batch]
+
             result = connection.execute(
-                self._index_query, {"oids": [int(r[0]) for r in batch]}
+                self._index_query, {"oids": oids_param}
             ).mappings()
 
 
             result_by_oid = defaultdict(list)
             for row_dict in result:
-                result_by_oid[row_dict["indrelid"]].append(row_dict)
+                # AURORA CHANGE: Normalize indrelid to integer for consistent matching
+                # Aurora Data API returns indrelid as string, but we need integer keys
+                indrelid_key = int(row_dict["indrelid"])
+                result_by_oid[indrelid_key].append(row_dict)
 
             for oid, table_name in batch:
-                if oid not in result_by_oid:
+                # AURORA CHANGE: Handle both integer and string OID types for consistent matching
+                oid_key = int(oid) if not isinstance(oid, int) else oid
+                if oid_key not in result_by_oid:
                     indexes[(schema, table_name)] = default()
                     continue
 
-                for row in result_by_oid[oid]:
+                for row in result_by_oid[oid_key]:
                     index_name = row["relname"]
                     table_indexes = indexes[(schema, table_name)]
 
@@ -566,6 +584,7 @@ class AuroraPostgresDataAPIDialect(PGDialect):
                     table_indexes.append(index)
 
         return indexes
+
 
     def get_foreign_keys(self, connection, table_name, schema=None, **kw):
         """Override to handle OID type casting for Aurora Data API compatibility."""
@@ -1177,7 +1196,7 @@ class AuroraPostgresDataAPIDialect(PGDialect):
                 # AURORA CHANGE: Cast both OIDs to BIGINT for Aurora Data API compatibility
                 sql.cast(pg_catalog.pg_class.c.relam, sqltypes.BIGINT) == sql.cast(pg_catalog.pg_am.c.oid, sqltypes.BIGINT),
             )
-            .outerjoin(
+            .join(
                 cols_sq,
                 # AURORA CHANGE: Cast OID to BIGINT for Aurora Data API compatibility (OID type not supported)
                 sql.cast(pg_catalog.pg_index.c.indexrelid, sqltypes.BIGINT) == cols_sq.c.indexrelid,
@@ -1199,76 +1218,27 @@ class AuroraPostgresDataAPIDialect(PGDialect):
             )
         )
 
-    def _get_table_oids(self, connection, schema, filter_names, scope, kind, **kw):
-        """Override to handle Aurora Data API OID casting and temporary table support."""
+    def _table_oids_query(self, schema, has_filter_names, scope, kind):
+        """Override to cast OID for Aurora Data API compatibility."""
         from sqlalchemy.dialects.postgresql import pg_catalog
-        from sqlalchemy.engine.reflection import ObjectKind, ObjectScope
+        from sqlalchemy.sql import select, bindparam
         import sqlalchemy.sql.sqltypes as sqltypes
-        from sqlalchemy.sql import select, bindparam, and_, or_
         from sqlalchemy import sql
 
-        # AURORA CHANGE: Handle temporary tables with proper schema resolution
-        if scope is ObjectScope.TEMPORARY:
-            # For temporary tables, we need to look in pg_temp schema
-            schema_condition = or_(
-                pg_catalog.pg_namespace.c.nspname.like("pg_temp_%"),
-                pg_catalog.pg_namespace.c.nspname == "pg_temp"
-            )
-        elif schema is not None:
-            schema_condition = pg_catalog.pg_namespace.c.nspname == schema
-        else:
-            # Default schema condition (exclude temp schemas for non-temp queries)
-            schema_condition = and_(
-                pg_catalog.pg_namespace.c.nspname != "information_schema",
-                ~pg_catalog.pg_namespace.c.nspname.like("pg_temp_%"),
-                pg_catalog.pg_namespace.c.nspname != "pg_temp"
-            )
+        relkinds = self._kind_to_relkinds(kind)
+        oid_q = select(
+            # AURORA CHANGE: Cast OID to BIGINT for Aurora Data API compatibility
+            sql.cast(pg_catalog.pg_class.c.oid, sqltypes.BIGINT).label("oid"),
+            pg_catalog.pg_class.c.relname
+        ).where(self._pg_class_relkind_condition(relkinds))
 
-        # Build kind condition
-        if kind is ObjectKind.TABLE:
-            kind_condition = pg_catalog.pg_class.c.relkind.in_(["r", "p"])  # regular, partitioned
-        elif kind is ObjectKind.VIEW:
-            kind_condition = pg_catalog.pg_class.c.relkind == "v"
-        elif kind is ObjectKind.MATERIALIZED_VIEW:
-            kind_condition = pg_catalog.pg_class.c.relkind == "m"
-        elif kind is ObjectKind.ANY_VIEW:
-            kind_condition = pg_catalog.pg_class.c.relkind.in_(["v", "m"])
-        elif kind in (ObjectKind.TABLE | ObjectKind.VIEW, ObjectKind.TABLE | ObjectKind.MATERIALIZED_VIEW):
-            kind_condition = pg_catalog.pg_class.c.relkind.in_(["r", "p", "v", "m"])
-        else:  # ObjectKind.ANY or other combinations
-            kind_condition = pg_catalog.pg_class.c.relkind.in_(["r", "p", "v", "m"])
+        oid_q = self._pg_class_filter_scope_schema(oid_q, schema, scope=scope)
 
-        query = (
-            select(
-                # AURORA CHANGE: Cast OID to INTEGER for Aurora Data API compatibility
-                sql.cast(pg_catalog.pg_class.c.oid, sqltypes.BIGINT).label("oid"),
-                pg_catalog.pg_class.c.relname.label("relname"),
+        if has_filter_names:
+            oid_q = oid_q.where(
+                pg_catalog.pg_class.c.relname.in_(bindparam("filter_names"))
             )
-            .select_from(
-                pg_catalog.pg_class.join(
-                    pg_catalog.pg_namespace,
-                    pg_catalog.pg_class.c.relnamespace == pg_catalog.pg_namespace.c.oid,
-                )
-            )
-            .where(
-                and_(
-                    schema_condition,
-                    kind_condition,
-                    # Add filter_names condition if provided
-                    pg_catalog.pg_class.c.relname.in_(bindparam("filter_names"))
-                    if filter_names
-                    else True,
-                )
-            )
-            .order_by(pg_catalog.pg_class.c.relname)
-        )
-
-        if filter_names:
-            result = connection.execute(query, {"filter_names": filter_names})
-        else:
-            result = connection.execute(query)
-
-        return [(row.oid, row.relname) for row in result]
+        return oid_q
 
     def get_multi_check_constraints(
         self, connection, schema, filter_names, scope, kind, **kw
@@ -1279,6 +1249,7 @@ class AuroraPostgresDataAPIDialect(PGDialect):
         import sqlalchemy.sql.sqltypes as sqltypes
         from sqlalchemy import sql
         from collections import defaultdict
+        from sqlalchemy.engine.reflection import ObjectKind
 
         table_oids = self._get_table_oids(
             connection, schema, filter_names, scope, kind, **kw
@@ -1286,6 +1257,13 @@ class AuroraPostgresDataAPIDialect(PGDialect):
 
         if not table_oids:
             return {}
+
+        # Views don't have check constraints in PostgreSQL, return empty for views
+        if kind in (ObjectKind.VIEW, ObjectKind.MATERIALIZED_VIEW, ObjectKind.ANY_VIEW):
+            result_dict = {}
+            for oid, table_name in table_oids:
+                result_dict[(schema, table_name)] = []
+            return result_dict
 
         # AURORA CHANGE: Cast OIDs and char types for Aurora Data API compatibility
         query = select(
@@ -1346,14 +1324,27 @@ class AuroraPostgresDataAPIDialect(PGDialect):
         Aurora Data API has limited support for PostgreSQL table options.
         Return empty dict to indicate no special options are supported.
         """
+        # Suppress unused parameter warnings - parameters required by interface
+        _ = connection, table_name, schema, kw
         return {}
 
-    # FIXME: Further investigation needed for temporary table/view reflection
-    # The temporary table/view methods (get_temp_table_names, get_temp_view_names)
-    # are not working properly with Aurora Data API due to relpersistence column
-    # handling issues. These methods are inherited from PGDialect but may need
-    # Aurora-specific overrides to handle type casting differences.
-    # For now, using default inherited behavior and closing test requirements.
+    def get_temp_table_names(self, connection, schema=None, **kw):
+        """Return temporary table names for Aurora Data API compatibility."""
+        from sqlalchemy.engine.reflection import ObjectScope
+
+        temp_tables = self._get_relnames_for_relkinds(
+            connection, schema, ["r", "p"], scope=ObjectScope.TEMPORARY
+        )
+        return temp_tables
+
+    def get_temp_view_names(self, connection, schema=None, **kw):
+        """Return temporary view names for Aurora Data API compatibility."""
+        from sqlalchemy.engine.reflection import ObjectScope
+
+        temp_views = self._get_relnames_for_relkinds(
+            connection, schema, ["v"], scope=ObjectScope.TEMPORARY
+        )
+        return temp_views
 
     # FIXME: Further investigation needed for special character table name handling
     # BizarroCharacterTest failures indicate that special character table names
@@ -1372,6 +1363,7 @@ class AuroraPostgresDataAPIDialect(PGDialect):
         """
         from sqlalchemy.dialects.postgresql import pg_catalog
         from sqlalchemy.engine.reflection import ObjectScope
+        from sqlalchemy import sql
 
         if pg_class_table is None:
             pg_class_table = pg_catalog.pg_class
@@ -1384,10 +1376,22 @@ class AuroraPostgresDataAPIDialect(PGDialect):
             query = query.where(pg_class_table.c.relpersistence != "t")
         elif scope is ObjectScope.TEMPORARY:
             query = query.where(pg_class_table.c.relpersistence == "t")
+            # For temporary tables, don't apply the default system table filters
+            if schema is None:
+                # For temp tables, only filter by temp schemas
+                query = query.where(
+                    sql.or_(
+                        pg_catalog.pg_namespace.c.nspname.like("pg_temp_%"),
+                        pg_catalog.pg_namespace.c.nspname == "pg_temp",
+                        pg_catalog.pg_namespace.c.oid == sql.func.pg_my_temp_schema()
+                    )
+                )
+                return query  # Return early to skip default schema filtering
 
         if schema is None:
-            # AURORA CHANGE: Simplified and more effective system table filtering for Aurora Data API
+            # AURORA CHANGE: Enhanced system table filtering for Aurora Data API
             # Aurora Data API exposes pg_catalog tables, so we need to filter them out aggressively
+            # Use pg_table_is_visible() to match PostgreSQL's standard behavior
             query = query.where(
                 # Exclude system schemas entirely
                 pg_catalog.pg_namespace.c.nspname != "pg_catalog",
@@ -1395,9 +1399,12 @@ class AuroraPostgresDataAPIDialect(PGDialect):
                 ~pg_catalog.pg_namespace.c.nspname.like("pg_temp_%"),
                 pg_catalog.pg_namespace.c.nspname != "pg_temp",
                 ~pg_catalog.pg_namespace.c.nspname.like("pg_%"),
-                # Exclude system tables by name pattern
+                # Use pg_table_is_visible for correct visibility filtering
+                sql.func.pg_table_is_visible(pg_class_table.c.oid),
+                # Additional system table exclusions
                 ~pg_class_table.c.relname.like("pg_%"),
                 ~pg_class_table.c.relname.like("sql_%"),
+                ~pg_class_table.c.relname.like("information_schema_%"),
             )
         else:
             query = query.where(pg_catalog.pg_namespace.c.nspname == schema)
@@ -1426,3 +1433,38 @@ class AuroraPostgresDataAPIDialect(PGDialect):
             return normalized_result
 
         return result
+
+
+
+    def get_view_definition(self, connection, view_name, schema=None, **kw):
+        """Override to handle OID casting for Aurora Data API compatibility.
+
+        Aurora Data API requires OID types to be cast to BIGINT for proper comparison.
+        """
+        from sqlalchemy.dialects.postgresql import pg_catalog
+        from sqlalchemy import exc
+        from sqlalchemy.engine.reflection import ObjectScope
+
+        query = (
+            select(
+                # AURORA CHANGE: Cast OID parameter to BIGINT for Aurora Data API compatibility
+                pg_catalog.pg_get_viewdef(sql.cast(pg_catalog.pg_class.c.oid, sqltypes.BIGINT))
+            )
+            .select_from(pg_catalog.pg_class)
+            .where(
+                pg_catalog.pg_class.c.relname == view_name,
+                self._pg_class_relkind_condition(
+                    pg_catalog.RELKINDS_VIEW + pg_catalog.RELKINDS_MAT_VIEW
+                ),
+            )
+        )
+        query = self._pg_class_filter_scope_schema(
+            query, schema, scope=ObjectScope.ANY
+        )
+        res = connection.scalar(query)
+        if res is None:
+            raise exc.NoSuchTableError(
+                f"{schema}.{view_name}" if schema else view_name
+            )
+        else:
+            return res
