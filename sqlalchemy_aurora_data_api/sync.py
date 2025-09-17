@@ -5,6 +5,7 @@ from sqlalchemy.dialects.postgresql import JSON, JSONB, UUID, ARRAY
 from sqlalchemy.dialects.mysql.base import MySQLDialect
 from sqlalchemy.util import memoized_property
 from sqlalchemy.engine import reflection
+from functools import lru_cache
 
 import re
 from .base import (
@@ -1241,83 +1242,35 @@ class AuroraPostgresDataAPIDialect(PGDialect):
             )
         return oid_q
 
-    def get_multi_check_constraints(
-        self, connection, schema, filter_names, scope, kind, **kw
-    ):
-        """Return check constraints for multiple tables."""
+    @lru_cache()
+    def _check_constraint_query(self, schema, has_filter_names, scope, kind):
+        """Aurora-specific check constraint query with BIGINT casting for OIDs."""
         from sqlalchemy.dialects.postgresql import pg_catalog
-        from sqlalchemy.sql import bindparam, select
-        import sqlalchemy.sql.sqltypes as sqltypes
         from sqlalchemy import sql
-        from collections import defaultdict
-        from sqlalchemy.engine.reflection import ObjectKind
+        import sqlalchemy.sql.sqltypes as sqltypes
 
-        table_oids = self._get_table_oids(
-            connection, schema, filter_names, scope, kind, **kw
-        )
+        # Get base query from parent class
+        base_query = super()._check_constraint_query(schema, has_filter_names, scope, kind)
 
-        if not table_oids:
-            return {}
-
-        # Views don't have check constraints in PostgreSQL, return empty for views
-        if kind in (ObjectKind.VIEW, ObjectKind.MATERIALIZED_VIEW, ObjectKind.ANY_VIEW):
-            result_dict = {}
-            for oid, table_name in table_oids:
-                result_dict[(schema, table_name)] = []
-            return result_dict
-
-        # AURORA CHANGE: Cast OIDs and char types for Aurora Data API compatibility
-        query = select(
-            # AURORA CHANGE: Cast conrelid to BIGINT for Aurora Data API compatibility
-            sql.cast(pg_catalog.pg_constraint.c.conrelid, sqltypes.BIGINT).label("relid"),
+        # AURORA CHANGE: Replace the select columns with BIGINT-casted versions for Aurora Data API compatibility
+        return base_query.with_only_columns(
+            pg_catalog.pg_class.c.relname,
             # AURORA CHANGE: Cast conname from PostgreSQL "name" type to TEXT
-            pg_catalog.pg_constraint.c.conname.cast(sqltypes.TEXT).label("name"),
-            pg_catalog.pg_get_constraintdef(
-                # AURORA CHANGE: Cast constraint OID to BIGINT for Aurora Data API compatibility
-                sql.cast(pg_catalog.pg_constraint.c.oid, sqltypes.BIGINT)
-            ).label("source"),
-        ).select_from(
-            pg_catalog.pg_constraint
-        ).where(
-            sql.and_(
-                # AURORA CHANGE: Cast conrelid to BIGINT for Aurora Data API compatibility
-                sql.cast(pg_catalog.pg_constraint.c.conrelid, sqltypes.BIGINT).in_(
-                    bindparam("oids")
+            pg_catalog.pg_constraint.c.conname.cast(sqltypes.TEXT),
+            # AURORA CHANGE: Modify the CASE statement to cast OID to BIGINT
+            sql.case(
+                (
+                    pg_catalog.pg_constraint.c.oid.is_not(None),
+                    pg_catalog.pg_get_constraintdef(
+                        # AURORA CHANGE: Cast constraint OID to BIGINT for Aurora Data API compatibility
+                        sql.cast(pg_catalog.pg_constraint.c.oid, sqltypes.BIGINT), True
+                    ),
                 ),
-                # AURORA CHANGE: Cast contype from PostgreSQL "char" type to TEXT
-                # PostgreSQL "char" stores constraint type ('c' = check constraint)
-                pg_catalog.pg_constraint.c.contype.cast(sqltypes.TEXT) == "c",
-            )
-        ).order_by(
-            pg_catalog.pg_constraint.c.conrelid,
-            pg_catalog.pg_constraint.c.conname
+                else_=None,
+            ),
+            pg_catalog.pg_description.c.description,
         )
 
-        # AURORA CHANGE: Convert OIDs to integers for Aurora Data API compatibility
-        result = connection.execute(
-            query, {"oids": [int(oid) for oid, _ in table_oids]}
-        ).mappings()
-
-        constraints_by_oid = defaultdict(list)
-        for row in result:
-            # Extract constraint definition
-            constraint_text = row["source"]
-            if constraint_text:
-                # Remove "CHECK " prefix if present
-                if constraint_text.upper().startswith("CHECK "):
-                    constraint_text = constraint_text[6:]
-
-                constraints_by_oid[row["relid"]].append({
-                    "name": row["name"],
-                    "sqltext": constraint_text.strip()
-                })
-
-        # Map back to schema, table_name format
-        result_dict = {}
-        for oid, table_name in table_oids:
-            result_dict[(schema, table_name)] = constraints_by_oid.get(int(oid), [])
-
-        return result_dict
 
     def get_table_options(self, connection, table_name, schema=None, **kw):
         """Return table options for Aurora Data API compatibility.
