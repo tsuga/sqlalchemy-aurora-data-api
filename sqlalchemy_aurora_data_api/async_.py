@@ -4,37 +4,24 @@ Async SQLAlchemy Aurora Data API dialect implementation
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from sqlalchemy import pool, util
-from sqlalchemy.dialects.mysql.base import MySQLDialect
-from sqlalchemy.dialects.postgresql.base import PGDialect, PGInspector
 from sqlalchemy.connectors.asyncio import AsyncAdapt_dbapi_connection
 from sqlalchemy.connectors.asyncio import AsyncAdapt_dbapi_cursor
 from sqlalchemy.connectors.asyncio import AsyncAdapt_dbapi_module
 from sqlalchemy.util.concurrency import await_fallback, await_only
 
 from .base import (
-    _ADA_ARRAY,
-    _ADA_DATE,
-    _ADA_SA_JSON,
-    _ADA_JSON,
-    _ADA_JSONB,
-    _ADA_TIME,
-    _ADA_TIMESTAMP,
-    _ADA_UUID,
-    _ADA_ENUM,
+    BaseADAMySQLDialect,
+    BaseADAPGDialect,
 )
 
 if TYPE_CHECKING:
     from sqlalchemy.connectors.asyncio import AsyncIODBAPIConnection
     from sqlalchemy.connectors.asyncio import AsyncIODBAPICursor
-    from sqlalchemy.engine.interfaces import ConnectArgsType
     from sqlalchemy.engine.interfaces import DBAPIConnection
     from sqlalchemy.engine.url import URL
-
-import sqlalchemy.sql.sqltypes as sqltypes
-from sqlalchemy.dialects.postgresql import JSON, JSONB, UUID, ARRAY
 
 
 class AsyncAdapt_aurora_data_api_cursor(AsyncAdapt_dbapi_cursor):
@@ -152,27 +139,12 @@ class AsyncAdapt_aurora_data_api_dbapi(AsyncAdapt_dbapi_module):
         return conn
 
 
-class AsyncAuroraMySQLDataAPIDialect(MySQLDialect):
+class AsyncAuroraMySQLDataAPIDialect(BaseADAMySQLDialect):
     """Async Aurora MySQL Data API dialect."""
 
     driver = "aurora_data_api_async"
-    default_schema_name = None
-    supports_native_decimal = True
-    supports_statement_cache = True
     is_async = True
     has_terminate = True
-
-    # Aurora Data API doesn't support server-side cursors
-    supports_server_side_cursors = False
-
-    colspecs = util.update_copy(
-        MySQLDialect.colspecs,
-        {
-            sqltypes.Date: _ADA_DATE,
-            sqltypes.Time: _ADA_TIME,
-            sqltypes.DateTime: _ADA_TIMESTAMP,
-        },
-    )
 
     @classmethod
     def import_dbapi(cls) -> AsyncAdapt_aurora_data_api_dbapi:
@@ -191,76 +163,22 @@ class AsyncAuroraMySQLDataAPIDialect(MySQLDialect):
         else:
             return pool.AsyncAdaptedQueuePool
 
-    def _detect_charset(self, connection):
-        """Detect charset from connection."""
-        return connection.execute("SHOW VARIABLES LIKE 'character_set_client'").fetchone()[1]
-
-    def _extract_error_code(self, exception):
-        """Extract error code from exception."""
-        return exception.args[0].value
-
     def do_terminate(self, dbapi_connection: DBAPIConnection) -> None:
         """Terminate the connection."""
         dbapi_connection.close()
-
-    def create_connect_args(self, url: URL, _translate_args: Optional[Dict[str, Any]] = None) -> ConnectArgsType:
-        """Create connection arguments from URL."""
-        opts = url.translate_connect_args(username="user")
-        opts.update(url.query)
-
-        # Map URL parameters to aurora-data-api parameters
-        connect_args = {}
-        if "aurora_cluster_arn" in opts:
-            connect_args["aurora_cluster_arn"] = opts.pop("aurora_cluster_arn")
-        if "secret_arn" in opts:
-            connect_args["secret_arn"] = opts.pop("secret_arn")
-        if "database" in opts:
-            connect_args["database"] = opts.pop("database")
-        elif "dbname" in opts:
-            connect_args["database"] = opts.pop("dbname")
-        if "charset" in opts:
-            connect_args["charset"] = opts.pop("charset")
-
-        return [], connect_args
 
     @classmethod
     def load_provisioning(cls):
         """Load provisioning hooks for Aurora dialect testing."""
         __import__("sqlalchemy_aurora_data_api.provision")
 
-class AuroraPostgresDataAPIInspector(PGInspector):
-    pass
 
-class AsyncAuroraPostgresDataAPIDialect(PGDialect):
+class AsyncAuroraPostgresDataAPIDialect(BaseADAPGDialect):
     """Async Aurora PostgreSQL Data API dialect."""
 
     driver = "aurora_data_api_async"
-    default_schema_name = None
-    supports_statement_cache = True
     is_async = True
     has_terminate = True
-
-    # Aurora Data API doesn't support server-side cursors
-    supports_server_side_cursors = False
-    # Aurora Data API doesn't support multi rowcount
-    supports_sane_multi_rowcount = False
-    supports_distinct_on = True
-    inspector = AuroraPostgresDataAPIInspector
-
-    colspecs = util.update_copy(
-        PGDialect.colspecs,
-        {
-            sqltypes.JSON: _ADA_SA_JSON,
-            JSON: _ADA_JSON,
-            JSONB: _ADA_JSONB,
-            UUID: _ADA_UUID,
-            sqltypes.Date: _ADA_DATE,
-            sqltypes.Time: _ADA_TIME,
-            sqltypes.DateTime: _ADA_TIMESTAMP,
-            sqltypes.Enum: _ADA_ENUM,
-            ARRAY: _ADA_ARRAY,
-        },
-    )
 
     @classmethod
     def import_dbapi(cls) -> AsyncAdapt_aurora_data_api_dbapi:
@@ -279,31 +197,9 @@ class AsyncAuroraPostgresDataAPIDialect(PGDialect):
         else:
             return pool.AsyncAdaptedQueuePool
 
-    def _extract_error_code(self, exception):
-        """Extract error code from exception."""
-        return exception.args[0].value
-
     def do_terminate(self, dbapi_connection: DBAPIConnection) -> None:
         """Terminate the connection."""
         dbapi_connection.close()
-
-    def create_connect_args(self, url: URL, _translate_args: Optional[Dict[str, Any]] = None) -> ConnectArgsType:
-        """Create connection arguments from URL."""
-        opts = url.translate_connect_args(username="user")
-        opts.update(url.query)
-
-        # Map URL parameters to aurora-data-api parameters
-        connect_args = {}
-        if "aurora_cluster_arn" in opts:
-            connect_args["aurora_cluster_arn"] = opts.pop("aurora_cluster_arn")
-        if "secret_arn" in opts:
-            connect_args["secret_arn"] = opts.pop("secret_arn")
-        if "database" in opts:
-            connect_args["database"] = opts.pop("database")
-        elif "dbname" in opts:
-            connect_args["database"] = opts.pop("dbname")
-
-        return [], connect_args
 
     @classmethod
     def load_provisioning(cls):

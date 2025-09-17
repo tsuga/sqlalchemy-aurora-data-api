@@ -1,9 +1,7 @@
 from sqlalchemy.dialects import registry
 
 # Register Aurora dialect
-registry.register(
-    "aurora", "sqlalchemy_aurora_data_api.sync", "AuroraPostgresDataAPIDialect"
-)
+registry.register("aurora", "sqlalchemy_aurora_data_api.sync", "AuroraPostgresDataAPIDialect")
 
 # Import pytest and configure
 import pytest

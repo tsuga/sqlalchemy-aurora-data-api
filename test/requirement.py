@@ -7,9 +7,9 @@ This module defines which features are supported by the Aurora Data API dialect.
 from sqlalchemy.testing.requirements import SuiteRequirements
 from sqlalchemy.testing import exclusions
 
+
 class Requirements(SuiteRequirements):
     """Requirements for Aurora Data API dialect"""
-
 
     @property
     def schema_reflection(self):
@@ -28,8 +28,6 @@ class Requirements(SuiteRequirements):
         """Aurora does not support sequences"""
         return exclusions.open()
 
-
-
     @property
     def dbapi_lastrowid(self):
         """Aurora Data API lastrowid support.
@@ -40,8 +38,8 @@ class Requirements(SuiteRequirements):
         For more information, see Returning Data From Modified Rows in the PostgreSQL documentation."
         """
         return exclusions.only_if(
-            lambda config: getattr(config.db.dialect, 'supports_lastrowid', True),
-            "Aurora Data API %(does_support)s lastrowid functionality"
+            lambda config: getattr(config.db.dialect, "supports_lastrowid", True),
+            "Aurora Data API %(does_support)s lastrowid functionality",
         )
 
     @property
@@ -55,7 +53,6 @@ class Requirements(SuiteRequirements):
         """
         # return exclusions.closed()
         return exclusions.open()
-
 
     @property
     def insertmanyvalues(self):
@@ -71,7 +68,6 @@ class Requirements(SuiteRequirements):
     def json_type(self):
         """Aurora supports JSON type"""
         return exclusions.open()
-
 
     @property
     def unicode_connections(self):
@@ -105,8 +101,7 @@ class Requirements(SuiteRequirements):
 
     @property
     def denormalized_names(self):
-        """This is more for Oracle
-        """
+        """This is more for Oracle"""
         return exclusions.closed()
 
     @property
@@ -122,7 +117,7 @@ class Requirements(SuiteRequirements):
     @property
     def datetime_microseconds(self):
         """Aurora Data API only supports millisecond precision (3 digits)
-        
+
         Reference: https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/data-api-operations.html
         """
         return exclusions.closed()
@@ -130,7 +125,7 @@ class Requirements(SuiteRequirements):
     @property
     def time_microseconds(self):
         """Aurora Data API only supports millisecond precision (3 digits)
-                
+
         Reference: https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/data-api-operations.html
         """
         return exclusions.closed()
@@ -183,7 +178,6 @@ class Requirements(SuiteRequirements):
         """
         # return exclusions.closed()
         return exclusions.open()
-        
 
     @property
     def uuid_data_type(self):
@@ -935,5 +929,3 @@ class Requirements(SuiteRequirements):
         table is not accessible for index reflection through Aurora Data API.
         """
         return exclusions.closed()
-
-

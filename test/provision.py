@@ -1,6 +1,7 @@
 """
 Provision hooks for Aurora Data API dialect testing.
 """
+
 import logging
 import os
 
@@ -21,8 +22,8 @@ from sqlalchemy import text, inspect
 log = logging.getLogger(__name__)
 
 # Ensure AWS region is set for testing
-if not os.environ.get('AWS_DEFAULT_REGION'):
-    os.environ['AWS_DEFAULT_REGION'] = 'ap-northeast-1'
+if not os.environ.get("AWS_DEFAULT_REGION"):
+    os.environ["AWS_DEFAULT_REGION"] = "ap-northeast-1"
 
 
 @generate_driver_url.for_db("aurora")
@@ -84,7 +85,7 @@ def _aurora_set_default_schema_on_connection(cfg, dbapi_connection, schema_name)
     except Exception as e:
         log.warning(f"Aurora: Failed to set search_path to {schema_name}: {e}")
     finally:
-        if 'cursor' in locals():
+        if "cursor" in locals():
             cursor.close()
 
 
@@ -113,9 +114,7 @@ def _aurora_drop_all_schema_objects_pre_tables(cfg, eng):
     try:
         with eng.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
             # Try to rollback any prepared transactions
-            for xid in conn.exec_driver_sql(
-                "select gid from pg_prepared_xacts"
-            ).scalars():
+            for xid in conn.exec_driver_sql("select gid from pg_prepared_xacts").scalars():
                 try:
                     conn.exec_driver_sql("ROLLBACK PREPARED '%s'" % xid)
                 except Exception as e:
@@ -134,11 +133,7 @@ def _aurora_drop_all_schema_objects_post_tables(cfg, eng):
         with eng.begin() as conn:
             for enum in inspector.get_enums("*"):
                 try:
-                    conn.execute(
-                        postgresql.DropEnumType(
-                            postgresql.ENUM(name=enum["name"], schema=enum["schema"])
-                        )
-                    )
+                    conn.execute(postgresql.DropEnumType(postgresql.ENUM(name=enum["name"], schema=enum["schema"])))
                 except Exception as e:
                     log.warning(f"Aurora: Failed to drop enum {enum['name']}: {e}")
     except Exception as e:
@@ -163,8 +158,7 @@ def _aurora_prepare_for_drop_tables(config, connection):
         if rows:
             log.warning(
                 "Aurora: PostgreSQL may not be able to DROP tables due to "
-                "idle in transaction: %s"
-                % ("; ".join(row._mapping["query"] for row in rows))
+                "idle in transaction: %s" % ("; ".join(row._mapping["query"] for row in rows))
             )
     except Exception as e:
         log.warning(f"Aurora: Failed to check for idle transactions: {e}")
