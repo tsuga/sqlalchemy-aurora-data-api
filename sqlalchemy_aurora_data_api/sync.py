@@ -506,7 +506,7 @@ class AuroraPostgresDataAPIDialect(PGDialect):
                         idx_elements = all_elements[:indnkeyatts]
                         idx_elements_is_expr = all_elements_is_expr[:indnkeyatts]
                     else:
-                        inc_cols = None
+                        inc_cols = []
                         idx_elements = all_elements
                         idx_elements_is_expr = all_elements_is_expr
 
@@ -531,14 +531,11 @@ class AuroraPostgresDataAPIDialect(PGDialect):
 
                     dialect_options = {}
 
-                    # Always include include_columns and postgresql_include for PostgreSQL compatibility
-                    if inc_cols:
+                    # Follow base class behavior exactly - only add include_columns if not empty
+                    if self.server_version_info >= (11,) and inc_cols:
+                        # NOTE: this is legacy, this is part of dialect_options now as of #7382
                         index["include_columns"] = inc_cols
                         dialect_options["postgresql_include"] = inc_cols
-                    else:
-                        # Even when no include columns, add empty arrays for test compatibility
-                        index["include_columns"] = []
-                        dialect_options["postgresql_include"] = []
 
                     if row["filter_definition"]:
                         dialect_options["postgresql_where"] = row["filter_definition"]
@@ -580,8 +577,8 @@ class AuroraPostgresDataAPIDialect(PGDialect):
                             ]
                         )
 
-                    if dialect_options:
-                        index["dialect_options"] = dialect_options
+                    # Always include dialect_options (even if empty) for test compatibility
+                    index["dialect_options"] = dialect_options
 
                     table_indexes.append(index)
 
@@ -702,13 +699,11 @@ class AuroraPostgresDataAPIDialect(PGDialect):
                 # AURORA CHANGE: Cast confdeltype from PostgreSQL "char" type to TEXT
                 # PostgreSQL "char" stores foreign key delete action ('a'=no action, 'r'=restrict, 'c'=cascade, 'n'=set null, 'd'=set default)
                 sql.cast(pg_catalog.pg_constraint.c.confdeltype, sqltypes.TEXT).label("confdeltype"),
-                sql.func.unnest(pg_catalog.pg_constraint.c.conkey).label("conkey_elem"),
-                sql.func.unnest(pg_catalog.pg_constraint.c.confkey).label("confkey_elem"),
-                # AURORA CHANGE: Use row_number to maintain unnest() order for foreign key columns
-                sql.func.row_number().over(
-                    partition_by=[pg_catalog.pg_constraint.c.oid]
-                    # Note: No ORDER BY to preserve unnest() natural order
-                ).label("ord"),
+                # AURORA CHANGE: Use generate_subscripts to preserve array order
+                sql.func.generate_subscripts(pg_catalog.pg_constraint.c.conkey, sql.cast(1, sqltypes.Integer)).label("ord"),
+                # Get elements by subscript to maintain order
+                pg_catalog.pg_constraint.c.conkey[sql.func.generate_subscripts(pg_catalog.pg_constraint.c.conkey, sql.cast(1, sqltypes.Integer))].label("conkey_elem"),
+                pg_catalog.pg_constraint.c.confkey[sql.func.generate_subscripts(pg_catalog.pg_constraint.c.confkey, sql.cast(1, sqltypes.Integer))].label("confkey_elem"),
             )
             .where(
                 pg_catalog.pg_constraint.c.contype == "f",
