@@ -378,6 +378,20 @@ class Requirements(SuiteRequirements):
         return exclusions.open()
 
     @property
+    def temp_table_reflection(self):
+        """Aurora Data API cannot reflect temporary tables due to session limitations.
+
+        Technical root cause: Aurora Data API is a stateless HTTP-based service where each
+        API call may use a different database connection. PostgreSQL temporary tables are
+        session-specific and only visible within the session that created them.
+
+        Since Aurora Data API doesn't maintain persistent sessions across API calls,
+        temporary tables created in one call are not visible to subsequent reflection calls.
+        This is a fundamental architectural limitation of the Aurora Data API service model.
+        """
+        return exclusions.closed()
+
+    @property
     def temp_table_names(self):
         """Aurora Data API cannot reflect temporary table names due to session limitations.
 
@@ -809,8 +823,13 @@ class Requirements(SuiteRequirements):
 
     @property
     def reflect_table_options(self):
-        """Target database must support reflecting table_options."""
-        return exclusions.open()
+        """Aurora Data API does not support PostgreSQL table options reflection.
+
+        PostgreSQL itself has limited table options compared to MySQL/MariaDB,
+        and Aurora Data API provides no additional table options functionality.
+        Aurora tables use standard PostgreSQL DDL without special options.
+        """
+        return exclusions.closed()
 
     @property
     def materialized_views(self):

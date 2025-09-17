@@ -588,14 +588,6 @@ class AuroraPostgresDataAPIDialect(PGDialect):
         return indexes
 
 
-    def get_foreign_keys(self, connection, table_name, schema=None, **kw):
-        """Override to handle OID type casting for Aurora Data API compatibility."""
-        from sqlalchemy.engine.reflection import ObjectScope, ObjectKind
-        return self.get_multi_foreign_keys(
-            connection, schema, [table_name], scope=ObjectScope.DEFAULT,
-            kind=ObjectKind.TABLE, **kw
-        )[(schema, table_name)]
-
     def get_multi_foreign_keys(self, connection, schema, filter_names, scope, kind, **kw):
         """Override to handle OID type casting for Aurora Data API compatibility."""
         from collections import defaultdict
@@ -1271,16 +1263,6 @@ class AuroraPostgresDataAPIDialect(PGDialect):
             pg_catalog.pg_description.c.description,
         )
 
-
-    def get_table_options(self, connection, table_name, schema=None, **kw):
-        """Return table options for Aurora Data API compatibility.
-
-        Aurora Data API has limited support for PostgreSQL table options.
-        Return empty dict to indicate no special options are supported.
-        """
-        # Suppress unused parameter warnings - parameters required by interface
-        _ = connection, table_name, schema, kw
-        return {}
 
     # def get_temp_table_names(self, connection, schema=None, **kw):
     #     """Return temporary table names for Aurora Data API compatibility."""
