@@ -819,8 +819,21 @@ class Requirements(SuiteRequirements):
 
     @property
     def materialized_views_reflect_pk(self):
-        """Target database reflect MATERIALIZED VIEWs pks."""
-        return exclusions.open()
+        """PostgreSQL does not support primary key constraints on materialized views.
+
+        Technical limitation: PostgreSQL's data definition language (DDL) does not allow
+        PRIMARY KEY constraints to be defined on materialized views. This is a fundamental
+        limitation of PostgreSQL's architecture where constraints can only be applied to
+        base tables, not to views (materialized or otherwise).
+
+        While materialized views store data physically, they are still considered derived
+        objects and PostgreSQL does not permit constraint definitions on them. Primary key
+        constraints must be defined on the underlying base tables that the materialized
+        view queries.
+
+        Reference: https://www.postgresql.org/docs/current/rules-materializedviews.html
+        """
+        return exclusions.closed()
 
     @property
     def supports_bitwise_or(self):

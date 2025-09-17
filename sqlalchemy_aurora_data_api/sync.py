@@ -4,6 +4,7 @@ from sqlalchemy.dialects.postgresql.base import PGDialect
 from sqlalchemy.dialects.postgresql import JSON, JSONB, UUID, ARRAY
 from sqlalchemy.dialects.mysql.base import MySQLDialect
 from sqlalchemy.util import memoized_property
+from sqlalchemy.engine import reflection
 
 import re
 from .base import (
@@ -1328,114 +1329,81 @@ class AuroraPostgresDataAPIDialect(PGDialect):
         _ = connection, table_name, schema, kw
         return {}
 
-    def get_temp_table_names(self, connection, schema=None, **kw):
-        """Return temporary table names for Aurora Data API compatibility."""
-        from sqlalchemy.engine.reflection import ObjectScope
+    # def get_temp_table_names(self, connection, schema=None, **kw):
+    #     """Return temporary table names for Aurora Data API compatibility."""
+    #     from sqlalchemy.engine.reflection import ObjectScope
 
-        temp_tables = self._get_relnames_for_relkinds(
-            connection, schema, ["r", "p"], scope=ObjectScope.TEMPORARY
-        )
-        return temp_tables
+    #     temp_tables = self._get_relnames_for_relkinds(
+    #         connection, schema, ["r", "p"], scope=ObjectScope.TEMPORARY
+    #     )
+    #     return temp_tables
 
-    def get_temp_view_names(self, connection, schema=None, **kw):
-        """Return temporary view names for Aurora Data API compatibility."""
-        from sqlalchemy.engine.reflection import ObjectScope
+    # def get_temp_view_names(self, connection, schema=None, **kw):
+    #     """Return temporary view names for Aurora Data API compatibility."""
+    #     from sqlalchemy.engine.reflection import ObjectScope
 
-        temp_views = self._get_relnames_for_relkinds(
-            connection, schema, ["v"], scope=ObjectScope.TEMPORARY
-        )
-        return temp_views
+    #     temp_views = self._get_relnames_for_relkinds(
+    #         connection, schema, ["v"], scope=ObjectScope.TEMPORARY
+    #     )
+    #     return temp_views
 
-    # FIXME: Further investigation needed for special character table name handling
-    # BizarroCharacterTest failures indicate that special character table names
-    # (like "(2)", "(3)") are not being properly reflected/filtered in system tables.
-    # This may be related to pg_table_is_visible function or schema filtering logic
-    # in _pg_class_filter_scope_schema method. The issue causes KeyError during
-    # autoload_with operations for tables with special characters.
-    # For now, closing test requirements and deferring special character support.
+    # def _pg_class_filter_scope_schema(
+    #     self, query, schema, scope, pg_class_table=None
+    # ):
+    #     """Override to handle Aurora Data API specific system table filtering.
 
-    def _pg_class_filter_scope_schema(
-        self, query, schema, scope, pg_class_table=None
-    ):
-        """Override to handle Aurora Data API specific system table filtering.
+    #     Aurora Data API may include system tables that should be filtered out.
+    #     """
+    #     from sqlalchemy.dialects.postgresql import pg_catalog
+    #     from sqlalchemy.engine.reflection import ObjectScope
+    #     from sqlalchemy import sql
 
-        Aurora Data API may include system tables that should be filtered out.
-        """
-        from sqlalchemy.dialects.postgresql import pg_catalog
-        from sqlalchemy.engine.reflection import ObjectScope
-        from sqlalchemy import sql
+    #     if pg_class_table is None:
+    #         pg_class_table = pg_catalog.pg_class
+    #     query = query.join(
+    #         pg_catalog.pg_namespace,
+    #         pg_catalog.pg_namespace.c.oid == pg_class_table.c.relnamespace,
+    #     )
 
-        if pg_class_table is None:
-            pg_class_table = pg_catalog.pg_class
-        query = query.join(
-            pg_catalog.pg_namespace,
-            pg_catalog.pg_namespace.c.oid == pg_class_table.c.relnamespace,
-        )
+    #     if scope is ObjectScope.DEFAULT:
+    #         query = query.where(pg_class_table.c.relpersistence != "t")
+    #     elif scope is ObjectScope.TEMPORARY:
+    #         query = query.where(pg_class_table.c.relpersistence == "t")
+    #         # For temporary tables, don't apply the default system table filters
+    #         if schema is None:
+    #             # For temp tables, only filter by temp schemas
+    #             query = query.where(
+    #                 sql.or_(
+    #                     pg_catalog.pg_namespace.c.nspname.like("pg_temp_%"),
+    #                     pg_catalog.pg_namespace.c.nspname == "pg_temp",
+    #                     pg_catalog.pg_namespace.c.oid == sql.func.pg_my_temp_schema()
+    #                 )
+    #             )
+    #             return query  # Return early to skip default schema filtering
 
-        if scope is ObjectScope.DEFAULT:
-            query = query.where(pg_class_table.c.relpersistence != "t")
-        elif scope is ObjectScope.TEMPORARY:
-            query = query.where(pg_class_table.c.relpersistence == "t")
-            # For temporary tables, don't apply the default system table filters
-            if schema is None:
-                # For temp tables, only filter by temp schemas
-                query = query.where(
-                    sql.or_(
-                        pg_catalog.pg_namespace.c.nspname.like("pg_temp_%"),
-                        pg_catalog.pg_namespace.c.nspname == "pg_temp",
-                        pg_catalog.pg_namespace.c.oid == sql.func.pg_my_temp_schema()
-                    )
-                )
-                return query  # Return early to skip default schema filtering
+    #     if schema is None:
+    #         # AURORA CHANGE: Enhanced system table filtering for Aurora Data API
+    #         # Aurora Data API exposes pg_catalog tables, so we need to filter them out aggressively
+    #         # Use pg_table_is_visible() to match PostgreSQL's standard behavior
+    #         query = query.where(
+    #             # Exclude system schemas entirely
+    #             pg_catalog.pg_namespace.c.nspname != "pg_catalog",
+    #             pg_catalog.pg_namespace.c.nspname != "information_schema",
+    #             ~pg_catalog.pg_namespace.c.nspname.like("pg_temp_%"),
+    #             pg_catalog.pg_namespace.c.nspname != "pg_temp",
+    #             ~pg_catalog.pg_namespace.c.nspname.like("pg_%"),
+    #             # Use pg_table_is_visible for correct visibility filtering
+    #             sql.func.pg_table_is_visible(pg_class_table.c.oid),
+    #             # Additional system table exclusions
+    #             ~pg_class_table.c.relname.like("pg_%"),
+    #             ~pg_class_table.c.relname.like("sql_%"),
+    #             ~pg_class_table.c.relname.like("information_schema_%"),
+    #         )
+    #     else:
+    #         query = query.where(pg_catalog.pg_namespace.c.nspname == schema)
+    #     return query
 
-        if schema is None:
-            # AURORA CHANGE: Enhanced system table filtering for Aurora Data API
-            # Aurora Data API exposes pg_catalog tables, so we need to filter them out aggressively
-            # Use pg_table_is_visible() to match PostgreSQL's standard behavior
-            query = query.where(
-                # Exclude system schemas entirely
-                pg_catalog.pg_namespace.c.nspname != "pg_catalog",
-                pg_catalog.pg_namespace.c.nspname != "information_schema",
-                ~pg_catalog.pg_namespace.c.nspname.like("pg_temp_%"),
-                pg_catalog.pg_namespace.c.nspname != "pg_temp",
-                ~pg_catalog.pg_namespace.c.nspname.like("pg_%"),
-                # Use pg_table_is_visible for correct visibility filtering
-                sql.func.pg_table_is_visible(pg_class_table.c.oid),
-                # Additional system table exclusions
-                ~pg_class_table.c.relname.like("pg_%"),
-                ~pg_class_table.c.relname.like("sql_%"),
-                ~pg_class_table.c.relname.like("information_schema_%"),
-            )
-        else:
-            query = query.where(pg_catalog.pg_namespace.c.nspname == schema)
-        return query
-
-
-    def _get_relnames_for_relkinds(self, connection, schema, relkinds, scope):
-        """Override to ensure name normalization for Aurora Data API.
-
-        Aurora Data API may return table names with inconsistent casing.
-        """
-        from sqlalchemy.dialects.postgresql import pg_catalog
-
-        query = select(pg_catalog.pg_class.c.relname).distinct().where(
-            self._pg_class_relkind_condition(relkinds)
-        )
-        query = self._pg_class_filter_scope_schema(query, schema, scope=scope)
-
-        result = connection.scalars(query).all()
-
-        # AURORA CHANGE: Apply name normalization manually for table names
-        # Since normalize_name only applies to cursor column names, not result values,
-        # we need to normalize table names manually for consistent behavior
-        if self.requires_name_normalize:
-            normalized_result = [self.normalize_name(name) for name in result]
-            return normalized_result
-
-        return result
-
-
-
+    @reflection.cache
     def get_view_definition(self, connection, view_name, schema=None, **kw):
         """Override to handle OID casting for Aurora Data API compatibility.
 
