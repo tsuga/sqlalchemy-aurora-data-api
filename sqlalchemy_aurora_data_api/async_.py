@@ -170,7 +170,7 @@ class AsyncAuroraMySQLDataAPIDialect(BaseADAMySQLDialect):
     @classmethod
     def load_provisioning(cls):
         """Load provisioning hooks for Aurora dialect testing."""
-        __import__("sqlalchemy_aurora_data_api.provision")
+        __import__("test.provision")
 
 
 class AsyncAuroraPostgresDataAPIDialect(BaseADAPGDialect):
@@ -204,7 +204,7 @@ class AsyncAuroraPostgresDataAPIDialect(BaseADAPGDialect):
     @classmethod
     def load_provisioning(cls):
         """Load provisioning hooks for Aurora dialect testing."""
-        __import__("sqlalchemy_aurora_data_api.provision")
+        __import__("test.provision")
 
 
 # Dialect registration will be done in __init__.py
