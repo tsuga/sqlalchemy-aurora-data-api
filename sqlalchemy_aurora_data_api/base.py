@@ -174,7 +174,6 @@ class BaseADAMySQLDialect(MySQLDialect):
     # See https://docs.sqlalchemy.org/en/13/core/internals.html#sqlalchemy.engine.interfaces.Dialect
 
     default_schema_name = None
-    supports_native_decimal = True
     colspecs = util.update_copy(
         MySQLDialect.colspecs,
         {
@@ -183,7 +182,11 @@ class BaseADAMySQLDialect(MySQLDialect):
             sqltypes.DateTime: _ADA_TIMESTAMP,
         },
     )
-    supports_statement_cache = True
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.supports_statement_cache = True
+        cls.supports_native_decimal = True
 
     def _extract_error_code(self, exception):
         return exception.args[0].value
@@ -274,20 +277,20 @@ class BaseADAPGDialect(PGDialect):
             ARRAY: _ADA_ARRAY,
         },
     )
-    supports_sane_multi_rowcount = False
-    supports_statement_cache = True
-    supports_distinct_on = True
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls.supports_statement_cache = True
+        cls.supports_sane_multi_rowcount = False
+        cls.supports_distinct_on = True
+        cls.supports_lastrowid = False
+        cls.supports_returning = True
+        cls.insert_returning = True
+        cls.requires_name_normalize = True
 
     # Aurora Data API PostgreSQL limitations
     # The generatedFields feature is not supported, but RETURNING clause is supported
     # Reference: "To get the values of generated fields, use the RETURNING clause"
-    insert_returning = True  # RETURNING clause is supported
-    supports_lastrowid = False  # generatedFields is not supported
-    supports_returning = True  # RETURNING clause is supported
-
-    # AURORA CHANGE: Enable name normalization for consistent identifier handling
-    # Aurora Data API may return identifiers with inconsistent casing
-    requires_name_normalize = True
+    # Note: These attributes are now set in __init_subclass__ above
 
     def create_connect_args(self, url, _translate_args=None):
         """Create connection arguments from URL."""
