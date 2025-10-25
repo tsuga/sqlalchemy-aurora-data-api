@@ -58,6 +58,30 @@ class AsyncAdapt_aurora_data_api_connection(AsyncAdapt_dbapi_connection):
         """Close the connection."""
         self.await_(self._connection.close())
 
+        # Clean up client context
+        if hasattr(self._connection, "_client_context_for_cleanup"):
+            client_context = self._connection._client_context_for_cleanup
+            if client_context is not None:
+                try:
+                    self.await_(client_context.__aexit__(None, None, None))
+                except Exception:
+                    # Ignore cleanup errors to ensure session cleanup still runs
+                    pass
+                finally:
+                    self._connection._client_context_for_cleanup = None
+
+        # Clean up aiobotocore session
+        if hasattr(self._connection, "_session_for_cleanup"):
+            session = self._connection._session_for_cleanup
+            if session is not None:
+                try:
+                    self.await_(session.close())
+                except Exception:
+                    # Ignore cleanup errors
+                    pass
+                finally:
+                    self._connection._session_for_cleanup = None
+
     def commit(self) -> None:
         """Commit the transaction."""
         self.await_(self._connection.commit())
@@ -122,7 +146,7 @@ class AsyncAdapt_aurora_data_api_dbapi(AsyncAdapt_dbapi_module):
 
         session = aiobotocore.session.get_session()
         client_context = session.create_client("rds-data")
-        return await client_context.__aenter__(), client_context
+        return await client_context.__aenter__(), client_context, session
 
     def connect(self, *args: Any, **kwargs: Any) -> AsyncAdapt_aurora_data_api_connection:
         """Create an async connection."""
@@ -131,11 +155,12 @@ class AsyncAdapt_aurora_data_api_dbapi(AsyncAdapt_dbapi_module):
 
         # Create a custom connection creation function that sets up the RDS client
         async def create_connection_with_client(*args, **kwargs):
-            client, client_context = await self._create_rds_client()
+            client, client_context, session = await self._create_rds_client()
             kwargs["rds_data_client"] = client
             connection = await creator_fn(*args, **kwargs)
-            # Store the client context for cleanup
+            # Store the client context and session for cleanup
             connection._client_context_for_cleanup = client_context
+            connection._session_for_cleanup = session
             return connection
 
         if util.asbool(async_fallback):
