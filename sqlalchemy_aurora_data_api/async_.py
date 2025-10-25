@@ -62,15 +62,25 @@ class AsyncAdapt_aurora_data_api_connection(AsyncAdapt_dbapi_connection):
         if hasattr(self._connection, "_client_context_for_cleanup"):
             client_context = self._connection._client_context_for_cleanup
             if client_context is not None:
-                self.await_(client_context.__aexit__(None, None, None))
-                self._connection._client_context_for_cleanup = None
+                try:
+                    self.await_(client_context.__aexit__(None, None, None))
+                except Exception:
+                    # Ignore cleanup errors to ensure session cleanup still runs
+                    pass
+                finally:
+                    self._connection._client_context_for_cleanup = None
 
         # Clean up aiobotocore session
         if hasattr(self._connection, "_session_for_cleanup"):
             session = self._connection._session_for_cleanup
             if session is not None:
-                self.await_(session.close())
-                self._connection._session_for_cleanup = None
+                try:
+                    self.await_(session.close())
+                except Exception:
+                    # Ignore cleanup errors
+                    pass
+                finally:
+                    self._connection._session_for_cleanup = None
 
     def commit(self) -> None:
         """Commit the transaction."""
