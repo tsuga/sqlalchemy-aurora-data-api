@@ -379,6 +379,62 @@ class TestAsyncDialectUnit(unittest.TestCase):
         self.assertEqual(kwargs["secret_arn"], "test-secret")
         self.assertEqual(kwargs["database"], "test-db")
 
+    def test_client_cleanup_attributes_stored(self):
+        """Test that client context and session are stored for cleanup."""
+        from unittest.mock import MagicMock, AsyncMock, patch
+        from sqlalchemy_aurora_data_api.async_ import AsyncAdapt_aurora_data_api_dbapi
+        import asyncio
+
+        # Create a simple async test function
+        async def create_rds_client_test():
+            # Create a mock aurora data api async module
+            mock_aurora_module = MagicMock()
+            
+            # Create the dbapi adapter
+            dbapi = AsyncAdapt_aurora_data_api_dbapi(mock_aurora_module)
+            
+            # Mock aiobotocore session and client
+            mock_session = MagicMock()
+            mock_session.close = AsyncMock()
+            mock_client = MagicMock()
+            mock_client_context = MagicMock()
+            mock_client_context.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_context.__aexit__ = AsyncMock()
+            
+            with patch("aiobotocore.session.get_session") as mock_get_session:
+                mock_get_session.return_value = mock_session
+                mock_session.create_client = MagicMock(return_value=mock_client_context)
+                
+                # Call _create_rds_client and verify it returns all three values
+                result = await dbapi._create_rds_client()
+                self.assertEqual(len(result), 3)
+                client, client_context, session = result
+                
+                # Verify the client and context are correct
+                self.assertEqual(client, mock_client)
+                self.assertEqual(client_context, mock_client_context)
+                self.assertEqual(session, mock_session)
+                
+                # Verify the client was entered
+                mock_client_context.__aenter__.assert_called_once()
+        
+        # Run the async test
+        asyncio.run(create_rds_client_test())
+
+    def test_connection_close_has_cleanup_code(self):
+        """Test that connection close method has cleanup code for client context and session."""
+        import inspect
+        from sqlalchemy_aurora_data_api.async_ import AsyncAdapt_aurora_data_api_connection
+        
+        # Get the source code of the close method
+        close_source = inspect.getsource(AsyncAdapt_aurora_data_api_connection.close)
+        
+        # Verify that the close method contains cleanup code
+        self.assertIn("_client_context_for_cleanup", close_source)
+        self.assertIn("_session_for_cleanup", close_source)
+        self.assertIn("__aexit__", close_source)
+        self.assertIn("session.close()", close_source)
+
 
 if __name__ == "__main__":
     unittest.main()
