@@ -141,12 +141,46 @@ class AsyncAdapt_aurora_data_api_dbapi(AsyncAdapt_dbapi_module):
                 setattr(self, name, getattr(self.aurora_data_api_async, name))
 
     async def _create_rds_client(self):
-        """Create a fresh RDS client for the current event loop."""
+        """Get or create an RDS client for the current event loop (uses ContextVar caching)."""
         import aiobotocore.session
+        import asyncio
+        from aurora_data_api.async_ import _rds_data_client_context
+        import logging
 
-        session = aiobotocore.session.get_session()
+        logger = logging.getLogger(__name__)
+
+        # PATCHED: Reuse client across different event loops in the same thread
+        # This matches the aurora-data-api behavior and prevents unnecessary client creation
+
+        # Check if client exists in current context (shared with aurora-data-api)
+        stored = _rds_data_client_context.get()
+
+        if stored is not None:
+            # Reuse existing client regardless of event loop
+            # This is safe in the same thread even across different loops
+            stored_client, stored_context, stored_loop_id = stored
+            current_loop_id = id(asyncio.get_running_loop())
+
+            if stored_loop_id != current_loop_id:
+                logger.debug(f"[SQLALCHEMY_AURORA] Reusing client across loops: {stored_loop_id} -> {current_loop_id}")
+            else:
+                logger.debug(f"[SQLALCHEMY_AURORA] Reusing client in same loop: {current_loop_id}")
+
+            # Return the stored client, but we don't have a session object
+            # The session is not needed for cleanup since it's managed by aurora-data-api
+            return stored_client, stored_context, None
+
+        # No existing client - create new one
+        current_loop_id = id(asyncio.get_running_loop())
+        logger.warning(f"[SQLALCHEMY_AURORA] Creating FIRST RDS Data API client for loop_id={current_loop_id}")
+        session = aiobotocore.session.AioSession()
         client_context = session.create_client("rds-data")
-        return await client_context.__aenter__(), client_context, session
+        client = await client_context.__aenter__()
+
+        # Store in shared ContextVar so aurora-data-api can also reuse it
+        _rds_data_client_context.set((client, client_context, current_loop_id))
+
+        return client, client_context, session
 
     def connect(self, *args: Any, **kwargs: Any) -> AsyncAdapt_aurora_data_api_connection:
         """Create an async connection."""
